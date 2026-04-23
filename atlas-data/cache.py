@@ -1,9 +1,10 @@
 import json
+import os
 import sqlite3
 import time
 from pathlib import Path
 
-DB = Path(__file__).parent / "cache.db"
+DB = Path(os.getenv("CACHE_DB", Path(__file__).parent / "cache.db"))
 
 
 def _conn():
@@ -19,6 +20,14 @@ def get(key: str):
     with _conn() as c:
         row = c.execute("SELECT v, exp FROM cache WHERE k=?", (key,)).fetchone()
     if not row or row[1] < time.time():
+        return None
+    return json.loads(row[0])
+
+
+def get_stale(key: str):
+    with _conn() as c:
+        row = c.execute("SELECT v FROM cache WHERE k=?", (key,)).fetchone()
+    if not row:
         return None
     return json.loads(row[0])
 

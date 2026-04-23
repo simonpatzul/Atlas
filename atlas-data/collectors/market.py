@@ -1,5 +1,5 @@
 """Mercado spot/futures via Yahoo Finance chart API."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import log, sqrt
 
 import httpx
@@ -16,6 +16,16 @@ PAIR_TICKERS = {
     "AUDUSD": ["AUDUSD=X"],
     "USDCAD": ["CAD=X"],
     "USDCHF": ["CHF=X"],
+}
+
+FALLBACK_PRICE = {
+    "EURUSD": 1.08,
+    "GBPUSD": 1.26,
+    "USDJPY": 155.0,
+    "XAUUSD": 2350.0,
+    "AUDUSD": 0.65,
+    "USDCAD": 1.37,
+    "USDCHF": 0.91,
 }
 
 
@@ -124,6 +134,54 @@ def _build_snapshot(symbol: str, pair: str, ticker: str, payload: dict) -> dict:
     }
 
 
+def _fallback_snapshot(symbol: str, pair: str, errors: list[str]) -> dict:
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    base = FALLBACK_PRICE.get(symbol, 1.0)
+    pip = _pip_size(symbol)
+    candles = []
+    for idx in range(60):
+        ts = now - timedelta(minutes=(59 - idx) * 5)
+        wave = ((idx % 12) - 6) * pip * 0.4
+        drift = (idx - 30) * pip * 0.05
+        close = base + wave + drift
+        open_ = close - pip * 0.2
+        high = max(open_, close) + pip * 1.5
+        low = min(open_, close) - pip * 1.5
+        candles.append(
+            {
+                "ts_utc": ts.isoformat(),
+                "o": round(open_, 6),
+                "h": round(high, 6),
+                "l": round(low, 6),
+                "c": round(close, 6),
+                "v": 0.0,
+            }
+        )
+
+    price = candles[-1]["c"]
+    day_candles = candles
+    hour_candles = candles[-12:]
+    return {
+        "symbol": symbol,
+        "pair": pair,
+        "source": "fallback_synthetic",
+        "ticker": "fallback",
+        "price": price,
+        "previous_close": candles[-2]["c"],
+        "change_pct": 0.0,
+        "last_updated": candles[-1]["ts_utc"],
+        "day_open": day_candles[0]["o"],
+        "day_high": max(c["h"] for c in day_candles),
+        "day_low": min(c["l"] for c in day_candles),
+        "hour_high": max(c["h"] for c in hour_candles),
+        "hour_low": min(c["l"] for c in hour_candles),
+        "atr_14_pips": _atr_14(candles, symbol),
+        "realized_vol_pct": _realized_vol_pct(candles),
+        "candles": candles,
+        "provider_errors": errors[-3:],
+    }
+
+
 async def fetch_market(symbol: str, pair: str) -> dict:
     cache_key = f"market_{symbol}"
     cached = cache.get(cache_key)
@@ -148,4 +206,10 @@ async def fetch_market(symbol: str, pair: str) -> dict:
             except Exception as exc:
                 errors.append(f"{ticker}:{exc}")
 
-    raise RuntimeError("market_fetch_failed|" + " ; ".join(errors))
+    stale = cache.get_stale(cache_key)
+    if stale is not None:
+        stale["source"] = f"{stale.get('source', 'cache')} (stale)"
+        stale["provider_errors"] = errors[-3:]
+        return stale
+
+    return _fallback_snapshot(symbol, pair, errors)

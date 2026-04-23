@@ -1,87 +1,273 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file gives Claude Code context for working on ATLAS.
 
-## Repository state
+## Current State
 
-Two independently runnable sub-projects:
+ATLAS is a React + FastAPI trading context platform for FX/metals with MT4 integration.
 
-**Frontend** (`/` — Vite + React):
-- `remixed-f545b974.tsx` — the only feature code. Self-contained React file (~50 KB, default export `AtlasChart`) with the prediction chart, indicators, and Monte Carlo overlay.
-- `main.jsx` — mounts `AtlasChart` into `#root`.
-- `index.html` — Vite entry, references `/main.jsx`.
-- `vite.config.js` — `@vitejs/plugin-react`, dev server on port 5173 with `open: true`.
-- `package.json` — React 18 + Vite 5. Scripts: `dev`, `build`, `preview`. No tests, no linter.
+Active surfaces:
 
-**Backend** (`atlas-data/` — Python FastAPI):
-- `main.py` — FastAPI app on `http://127.0.0.1:8000`. Exposes market data, confluence context, and MT4-formatted signals for all 7 pairs.
-- `engine.py` — assembles multi-source context: COT bias, macro/FRED trend, Alpha Vantage sentiment, Forex Factory news blocks.
-- `scoring.py` — news risk level logic (high/medium impact event blocking).
-- `collectors/` — one module per data source: `alpha.py` (Alpha Vantage sentiment), `cot.py` (CFTC COT), `fred.py` (FRED macro), `forex_factory.py` (economic calendar), `market.py` (live price snapshot).
-- `config.py` — env-var driven config: `HOST`, `PORT`, `MT4_API_KEY`, `BLOCK_HIGH_IMPACT_MINUTES`, `BLOCK_MEDIUM_IMPACT_MINUTES`, `COT_BIAS_DIVISOR`.
-- `cache.py` — SQLite-based caching (`cache.db`) used by collectors to avoid redundant API calls.
-- `models.py` — Pydantic response models: `Mt4ContextResponse`, `DebugContextResponse`, `MarketSnapshotResponse`.
-- `.env` / `.env.example` — requires `FRED_API_KEY` and `ALPHA_API_KEY`.
+- Frontend: root Vite/React app in `remixed-f545b974.tsx`, mounted by `main.jsx`.
+- Backend: FastAPI service in `atlas-data/`.
+- MT4 EA: `atlas-data/examples/Atlas.mq4`.
+- Vercel deployment adapter: `api/index.py`, `vercel.json`, root `requirements.txt`.
 
-**README.md** — aspirational spec for ATLAS v5 (Spanish). References files and structure (`bridge/`, `config/`, `docs/`, etc.) that **do not exist outside `atlas-data/`**. Treat as design document, not current code.
+GitHub repo:
 
-Not present: TypeScript config (the `.tsx` file has no type annotations — Vite compiles it as JSX), tests, linter, git repo, MetaTrader bridge.
-
-## Running it
-
-**Frontend:**
-```bash
-npm install        # one-time
-npm run dev        # http://localhost:5173, opens browser automatically
-npm run build      # production bundle to dist/
-npm run preview    # serve the built bundle
+```text
+https://github.com/simonpatzul/Atlas
 ```
 
-**Backend (`atlas-data/`):**
-```bash
-cd atlas-data
-# Windows: double-click start.bat (creates venv, installs deps, starts uvicorn)
-# Or manually:
-python -m venv .venv && .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env   # then fill in FRED_API_KEY and ALPHA_API_KEY
+## Frontend
+
+Main file:
+
+```text
+remixed-f545b974.tsx
+```
+
+Important behavior:
+
+- Supports prediction horizons `5M`, `1H`, and `1D`.
+- Uses `PREDICTION_HORIZONS` to control countdown, Monte Carlo steps, and context layer.
+- Fetches `/market/{symbol}` and `/context/{symbol}` through `fetchJson`.
+- `API_BASE` is:
+  - `VITE_ATLAS_API_BASE` when set.
+  - `/api` automatically on `.vercel.app`.
+  - empty locally, where Vite proxy handles backend routes.
+
+Current Vercel issue history:
+
+- The frontend originally called `/context/EURUSD` directly and Vercel returned 404.
+- `vercel.json` now rewrites direct API-like paths and `/api/*`.
+- `api/index.py` strips `/api` before handing requests to FastAPI.
+
+## Backend
+
+Main files:
+
+- `atlas-data/main.py`
+- `atlas-data/engine.py`
+- `atlas-data/models.py`
+- `atlas-data/cache.py`
+- `atlas-data/collectors/*.py`
+
+Important endpoints:
+
+```text
+GET /health
+GET /context/{symbol}
+GET /context-all
+GET /market/{symbol}
+GET /mt4/context/{symbol}
+GET /mt4/context-all
+GET /?symbol=EURUSD
+```
+
+The flat endpoint `/?symbol=EURUSD` returns MT4 context and is intended for MT4/WebRequest compatibility.
+
+Multi-horizon context:
+
+- `timeframe_5m`
+- `timeframe_1h`
+- `timeframe_1d`
+- MT4 fields: `bias_5m`, `bias_1h`, `bias_1d`, `confidence_*`, `score_adjust_*`, `tradeable_*`, `expected_range_*_pips`.
+
+Legacy fields `bias`, `confidence`, `score_adjust`, and `tradeable` map to the `1H` layer.
+
+## External APIs
+
+Collectors:
+
+- `market.py`: Yahoo Finance chart API.
+- `forex_factory.py`: Forex Factory/Fair Economy calendar JSON.
+- `fred.py`: FRED macro data.
+- `alpha.py`: Alpha Vantage news sentiment.
+- `cot.py`: CFTC COT Socrata API.
+
+Required/optional keys:
+
+- `FRED_API_KEY`: optional but recommended for macro bias.
+- `ALPHA_API_KEY`: optional; free tier is low-limit and may rate limit.
+- `MT4_API_KEY`: optional security for MT4 endpoints.
+
+Environment variables:
+
+```text
+FRED_API_KEY=
+ALPHA_API_KEY=
+MT4_API_KEY=
+CACHE_DB=/tmp/atlas-cache.db
+CORS_ORIGINS=*
+BLOCK_HIGH_IMPACT_MINUTES=30
+BLOCK_MEDIUM_IMPACT_MINUTES=15
+COT_BIAS_DIVISOR=150000
+```
+
+Important robustness notes:
+
+- `cache.py` must use `CACHE_DB`; on Vercel this should be `/tmp/atlas-cache.db`.
+- `market.py` now falls back to stale cache and then to a synthetic snapshot if Yahoo fails. This prevents frontend total failure from `/market/{symbol}`.
+- Context collectors are wrapped with `_safe_collect` in `engine.py`; provider failures should degrade context, not crash the endpoint.
+- Alpha Vantage rate limits should appear as provider failure, not app failure.
+
+## MT4 EA
+
+Main file:
+
+```text
+atlas-data/examples/Atlas.mq4
+```
+
+Current strategy:
+
+- Opens only when `bias_5m == bias_1h == bias_1d` and bias is `UP` or `DOWN`.
+- Does not open on `NEUTRAL` or API/news block.
+- Can close on API disagreement.
+- Has emergency stop, trailing stop, and chart status panel.
+
+Important inputs:
+
+```text
+UseDataApi = true
+RequireApiForTrading = true
+RequireTripleAlignment = true
+RequireLocalConfirmation = false
+CloseOnApiDisagreement = true
+ShowStatusPanel = true
+EmergencyStopPips = 25.0
+TrailingStartPips = 10.0
+TrailingStopPips = 8.0
+TrailingStepPips = 2.0
+UseFlatApiUrl = true
+```
+
+For Vercel:
+
+```text
+DataApiUrl = https://YOUR_DOMAIN.vercel.app/api/
+BackupDataApiUrl =
+DataApiPath =
+UseFlatApiUrl = true
+```
+
+MT4 WebRequest allowlist:
+
+```text
+https://YOUR_DOMAIN.vercel.app/api/
+```
+
+The EA status panel should show whether the API is connected, last OK/failure time, aligned pair count, last error, and risk settings.
+
+## Vercel Deployment
+
+Vercel is the current preferred free deployment target.
+
+Settings:
+
+```text
+Root Directory: ./
+Framework Preset: Vite
+Build Command: npm run build
+Output Directory: dist
+```
+
+Environment variables:
+
+```text
+VITE_ATLAS_API_BASE=/api
+CORS_ORIGINS=*
+CACHE_DB=/tmp/atlas-cache.db
+FRED_API_KEY=optional
+ALPHA_API_KEY=optional
+MT4_API_KEY=optional
+```
+
+Files used by Vercel:
+
+- `vercel.json`: rewrites to Python function.
+- `api/index.py`: imports FastAPI app and strips `/api` prefix.
+- root `requirements.txt`: must list dependencies explicitly. Do not use `-r atlas-data/requirements.txt`.
+
+Useful Vercel checks:
+
+```text
+https://YOUR_DOMAIN.vercel.app/
+https://YOUR_DOMAIN.vercel.app/api/health
+https://YOUR_DOMAIN.vercel.app/api/context/EURUSD
+https://YOUR_DOMAIN.vercel.app/api/market/EURUSD
+https://YOUR_DOMAIN.vercel.app/api/?symbol=EURUSD
+```
+
+If `/api/context/EURUSD` or `/api/market/EURUSD` returns 404, inspect `api/index.py` and `vercel.json` first.
+
+## Local Development
+
+Frontend:
+
+```powershell
+cd C:\Users\oscar\Documents\Claude
+cmd /c npm run dev
+```
+
+Backend:
+
+```powershell
+cd C:\Users\oscar\Documents\Claude\atlas-data
+.\.venv\Scripts\activate
 uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Key endpoints: `GET /health`, `GET /context/{symbol}`, `GET /market/{symbol}`, `GET /mt4/context/{symbol}` (requires `x-api-key` header if `MT4_API_KEY` is set).
+Checks:
 
-**Connecting frontend to backend:** set `VITE_ATLAS_API_BASE=http://127.0.0.1:8000` in a root-level `.env` before `npm run dev`. The frontend's `fetchJson()` function reads this at runtime; without it the frontend runs in fully static/offline mode using its hardcoded `BASE`/`CONFLUENCE` tables.
+```text
+http://127.0.0.1:8000/health
+http://127.0.0.1:8000/context/EURUSD
+http://127.0.0.1:8000/market/EURUSD
+http://127.0.0.1:8000/?symbol=EURUSD
+```
 
-## The single source file
+`atlas-launch.bat` starts backend, frontend, and browser locally.
 
-`remixed-f545b974.tsx` is `.tsx` by extension but contains **plain JSX with no TypeScript annotations**. It depends only on React (`useState`, `useEffect`, `useRef`, `useMemo`). Everything is in one file: data tables, math, sub-components, and the default export.
+## Verification
 
-Internal layout (top to bottom):
+No automated tests are configured.
 
-1. **Static data**: `PAIRS`, `BASE` (price/vol/atr per pair), `CONFLUENCE` (per-pair score, bias, multi-TF RSI, COT). 7 supported pairs: EUR/USD, GBP/USD, USD/JPY, XAU/USD, AUD/USD, USD/CAD, USD/CHF.
-2. **Format helpers**: `getDec(pair)` controls decimal precision (JPY → 2, XAU → 1, others → 4). All price formatting goes through `fmt(pair, value)`.
-3. **Indicator math**: `calcEMA`, `calcBollinger`, `calcRSI`, `calcMACD`, `calcFibonacci`, `detectSR`. Pure functions over `closes[]` / `candles[]`.
-4. **Monte Carlo engine**: `randn()` (Box-Muller) + `monteCarlo(pair, price, conf)` running 400 GBM paths over 12 steps. Returns `{stats, target, tp, tp2, sl, pips, conf, rr, bins, ...}` consumed by the chart.
-5. **`calcTechScore`**: deterministic 0–100 score from EMA alignment, price vs EMA50, RSI, Bollinger position, MACD histogram, ROC(5). Returns `{score, signals[]}` where `signals[]` drives the on-screen breakdown.
-6. **SVG sub-components**: `Chart`, `RSIChart`, `MACDChart`, `VolumeChart`, `DistChart` — all pure SVG, no external chart library.
-7. **`AtlasChart`** (default export): orchestrates state, the live-price interval (1.6s tick), `predict()` which runs Monte Carlo and starts a 1-hour countdown, and the layout.
+Use:
 
-## Architectural conventions to preserve
+```powershell
+cd atlas-data
+.\.venv\Scripts\python.exe -m py_compile main.py engine.py models.py scoring.py cache.py collectors\market.py collectors\forex_factory.py collectors\fred.py collectors\alpha.py collectors\cot.py
+```
 
-These come from the README's "Convenciones importantes" section and match how the existing code is written:
+For Vercel wrapper:
 
-- **Confluence/score thresholds are load-bearing**: `score >= 65` = bullish drift, `<= 35` = bearish, otherwise neutral. Score `>= 62` is the operate threshold; `>= 75` is "very strong". Keep these constants consistent if you add new scoring logic.
-- **Final combined score is `confluence * 0.40 + technical * 0.60`** (see `combinedScore` in `AtlasChart`). Don't change the weighting without flagging it.
-- **All indicators must be wrapped in `useMemo`** keyed on `closes` / `candles` — the live-price interval re-renders every 1.6s and recomputing per render will stutter.
-- **Monte Carlo must stay deterministic-given-input**: the score → drift → path mapping is the contract the README documents. If you tweak `monteCarlo`, preserve the percentile semantics (`p5` = SL, `p50` = target, `p75` = TP, `p90` = TP2).
-- **Decimal precision**: never hard-code `.toFixed(4)` — always route through `getDec(pair)` / `fmt(pair, v)` so JPY and XAU pairs render correctly.
-- **Spanish in UI strings and comments** is the established style. Match it when extending.
+```powershell
+.\atlas-data\.venv\Scripts\python.exe -m py_compile api\index.py
+```
 
-## When the README and reality conflict
+For frontend:
 
-The README references files (`atlas-v5-complete.jsx`, `bridge/mt5_bridge.py`, `.env.example`, etc.) that don't exist. If a user asks you to "add a feature to ATLAS v5", first clarify whether they want you to:
+```powershell
+cmd /c npm run build
+```
 
-1. Extend the existing `remixed-f545b974.tsx` (most likely — it's the only code), or
-2. Scaffold the multi-file project layout the README describes (much larger task; needs explicit confirmation).
+Known limitation: this local Codex sandbox previously failed Vite/esbuild with `spawn EPERM`; Vercel build has succeeded before.
 
-Don't silently create the README's file structure without asking.
+## Style Rules
+
+- Frontend uses ES modules, React 18, double quotes, and semicolons.
+- Backend uses Python 4-space indentation and snake_case.
+- Keep user-facing UI text in Spanish.
+- Do not commit secrets or local `.env`.
+- Do not commit `node_modules`, `.venv`, `dist`, `cache.db`, or `__pycache__`.
+
+## Recent Fixes To Preserve
+
+- Multi-horizon backend and frontend prediction support.
+- Vercel `/api` prefix stripping in `api/index.py`.
+- Vercel route rewrites in `vercel.json`.
+- SQLite cache path via `CACHE_DB`.
+- Market fallback on Yahoo failure.
+- MT4 flat API URL and status panel.
