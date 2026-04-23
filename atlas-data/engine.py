@@ -2,13 +2,14 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from collectors import alpha, cot, forex_factory, fred
+from collectors import alpha, cot, forex_factory, fred, market
 from config import (
     BLOCK_HIGH_IMPACT_MINUTES,
     BLOCK_MEDIUM_IMPACT_MINUTES,
     COT_BIAS_DIVISOR,
 )
 from models import (
+    AdvancedModels,
     DebugContextResponse,
     EventBlock,
     Mt4ContextResponse,
@@ -102,11 +103,15 @@ def expected_range_1h_pips(pair: str, confidence: int, news_risk: str) -> float:
 
 def expected_range_for_horizon(horizon: str, pair: str, confidence: int, news_risk: str) -> float:
     base_1h = expected_range_1h_pips(pair, confidence, news_risk)
-    if horizon == "5m":
-        return round(max(1.0, base_1h * 0.2), 1)
-    if horizon == "1d":
-        return round(base_1h * 6.0, 1)
-    return base_1h
+    multipliers = {
+        "5m": 0.20,
+        "15m": 0.38,
+        "30m": 0.58,
+        "1h": 1.0,
+        "4h": 2.6,
+        "1d": 6.0,
+    }
+    return round(max(1.0, base_1h * multipliers.get(horizon, 1.0)), 1)
 
 
 def invalidation_hint_for_bias(bias: str) -> str | None:
@@ -213,30 +218,82 @@ def timeframe_signal(
     risk_level: str,
     block_trading: bool,
     session: SessionContext,
+    tech_score: float = 0.0,
 ) -> TimeframeSignal:
+    """
+    Calcula señal para un horizonte combinando fundamentales + score técnico de velas.
+    tech_score: -1..+1 desde indicadores de precio (EMA, RSI, posición MA50).
+    Pesos técnicos: 5m=70%, 15m=60%, 30m=50%, 1h=35%, 4h=20%, 1d=5%.
+    """
     if horizon == "5m":
-        score_adjust = round(sentiment_bias * 4 + trend_bias * 5 - news_penalty * 1.3)
+        blended = trend_bias * 0.30 + tech_score * 0.70
+        score_adjust = round(blended * 8 + sentiment_bias * 3 - news_penalty * 1.3)
         if session.is_overlap:
             score_adjust += 2
         if session.is_fix_window:
             score_adjust -= 3
-        confidence = max(0, min(100, int(round(28 + abs(sentiment_bias) * 18 + abs(trend_bias) * 20 - news_penalty * 1.5))))
-        bias = bias_from_trend(trend_bias * 0.6 + sentiment_bias * 0.4, score_adjust)
+        confidence = max(0, min(100, int(round(
+            28 + abs(tech_score) * 22 + abs(trend_bias) * 14 + abs(sentiment_bias) * 10 - news_penalty * 1.5
+        ))))
+        bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 35 and risk_level != "HIGH"
-        summary = "shock_microstructure"
+        summary = "microstructure_momentum"
+
+    elif horizon == "15m":
+        blended = trend_bias * 0.40 + tech_score * 0.60
+        score_adjust = round(blended * 9 + sentiment_bias * 4 - news_penalty * 1.1)
+        if session.is_overlap:
+            score_adjust += 2
+        confidence = max(0, min(100, int(round(
+            32 + abs(tech_score) * 20 + abs(trend_bias) * 16 + abs(sentiment_bias) * 8 - news_penalty * 1.3
+        ))))
+        bias = bias_from_trend(blended, score_adjust)
+        tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 38 and risk_level != "HIGH"
+        summary = "short_momentum"
+
+    elif horizon == "30m":
+        blended = trend_bias * 0.50 + tech_score * 0.50
+        score_adjust = round(blended * 10 + macro_bias * 5 + cot_bias * 3 - news_penalty * 0.9)
+        if session.is_overlap:
+            score_adjust += 2
+        confidence = max(0, min(100, int(round(
+            36 + abs(tech_score) * 16 + abs(trend_bias) * 16 + abs(macro_bias) * 8 - news_penalty * 1.0
+        ))))
+        bias = bias_from_trend(blended, score_adjust)
+        tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 42
+        summary = "intraday_flow"
+
+    elif horizon == "4h":
+        blended = trend_bias * 0.80 + tech_score * 0.20
+        score_adjust = round(macro_bias * 16 + cot_bias * 10 + blended * 8 - news_penalty * 0.5)
+        confidence = max(0, min(100, int(round(
+            42 + abs(macro_bias) * 22 + abs(cot_bias) * 14 + abs(tech_score) * 8 - news_penalty * 0.4
+        ))))
+        bias = bias_from_trend(blended, score_adjust)
+        tradeable = bias != "NEUTRAL" and confidence >= 50
+        summary = "session_swing"
+
     elif horizon == "1d":
-        score_adjust = round(macro_bias * 18 + cot_bias * 12 + trend_bias * 8 - news_penalty * 0.2)
-        confidence = max(0, min(100, int(round(48 + abs(macro_bias) * 24 + abs(cot_bias) * 18 + abs(trend_bias) * 12))))
-        regime_bias = macro_bias * 0.6 + cot_bias * 0.3 + sentiment_bias * 0.1
+        blended = trend_bias * 0.95 + tech_score * 0.05
+        regime_bias = macro_bias * 0.60 + cot_bias * 0.30 + sentiment_bias * 0.10
+        score_adjust = round(regime_bias * 20 + blended * 6 - news_penalty * 0.2)
+        confidence = max(0, min(100, int(round(
+            48 + abs(macro_bias) * 24 + abs(cot_bias) * 18 + abs(trend_bias) * 10
+        ))))
         bias = bias_from_trend(regime_bias, score_adjust)
         tradeable = bias != "NEUTRAL" and confidence >= 55
         summary = "macro_regime"
-    else:
-        score_adjust = round(macro_bias * 14 + cot_bias * 8 + sentiment_bias * 4 + trend_bias * 10 - news_penalty * 0.8)
+
+    else:  # 1h (default)
+        blended = trend_bias * 0.65 + tech_score * 0.35
+        score_adjust = round(macro_bias * 14 + cot_bias * 8 + blended * 10 - news_penalty * 0.8)
         if session.is_overlap:
             score_adjust += 2
-        confidence = confidence_from_components(trend_bias, macro_bias, cot_bias, sentiment_bias, news_penalty)
-        bias = bias_from_trend(trend_bias, score_adjust)
+        confidence = max(0, min(100, int(round(
+            confidence_from_components(trend_bias, macro_bias, cot_bias, sentiment_bias, news_penalty)
+            + abs(tech_score) * 10
+        ))))
+        bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 55
         summary = "rates_repricing"
 
@@ -306,6 +363,7 @@ def build_raw_context_from_inputs(
     shared_inputs: dict,
     sent: dict | None,
     sent_status: ProviderStatus,
+    market_data: dict | None = None,
 ) -> dict:
     now = _now_utc()
     calendar_data = shared_inputs["calendar_data"]
@@ -320,6 +378,10 @@ def build_raw_context_from_inputs(
     risk_level, news_penalty = news_risk_level(events)
     next_event = events[0] if events else None
     surprise_boost = news_surprise_boost(recent_events, pair)
+
+    # Análisis técnico desde velas (modelos avanzados)
+    candles = (market_data or {}).get("candles") or []
+    tech = market.candle_technicals(candles, sym)
 
     cot_pair = (cot_data or {}).get(pair)
     macro_bias = fred.macro_bias_for_pair(macro or {}, pair)
@@ -348,8 +410,7 @@ def build_raw_context_from_inputs(
         else None
     )
     session = session_context(now)
-    tf_5m = timeframe_signal(
-        "5m",
+    _tf_kwargs = dict(
         macro_bias=macro_bias,
         cot_bias=cot_bias,
         sentiment_bias=sentiment_bias,
@@ -359,35 +420,36 @@ def build_raw_context_from_inputs(
         block_trading=block_trading,
         session=session,
     )
-    tf_1h = timeframe_signal(
-        "1h",
-        macro_bias=macro_bias,
-        cot_bias=cot_bias,
-        sentiment_bias=sentiment_bias,
-        trend_bias=trend_bias,
-        news_penalty=news_penalty,
-        risk_level=risk_level,
-        block_trading=block_trading,
-        session=session,
-    )
-    tf_1d = timeframe_signal(
-        "1d",
-        macro_bias=macro_bias,
-        cot_bias=cot_bias,
-        sentiment_bias=sentiment_bias,
-        trend_bias=trend_bias,
-        news_penalty=news_penalty,
-        risk_level=risk_level,
-        block_trading=block_trading,
-        session=session,
-    )
+    tf_5m  = timeframe_signal("5m",  **_tf_kwargs, tech_score=tech["tech_5m"])
+    tf_15m = timeframe_signal("15m", **_tf_kwargs, tech_score=tech["tech_15m"])
+    tf_30m = timeframe_signal("30m", **_tf_kwargs, tech_score=tech["tech_30m"])
+    tf_1h  = timeframe_signal("1h",  **_tf_kwargs, tech_score=tech["tech_1h"])
+    tf_4h  = timeframe_signal("4h",  **_tf_kwargs, tech_score=tech["tech_4h"])
+    tf_1d  = timeframe_signal("1d",  **_tf_kwargs, tech_score=0.0)
+
     bias = tf_1h.bias
     confidence = tf_1h.confidence
-    expected_range_5m = expected_range_for_horizon("5m", pair, tf_5m.confidence, risk_level)
-    expected_range_1h = expected_range_for_horizon("1h", pair, tf_1h.confidence, risk_level)
-    expected_range_1d = expected_range_for_horizon("1d", pair, tf_1d.confidence, risk_level)
+    expected_range_5m  = expected_range_for_horizon("5m",  pair, tf_5m.confidence,  risk_level)
+    expected_range_15m = expected_range_for_horizon("15m", pair, tf_15m.confidence, risk_level)
+    expected_range_30m = expected_range_for_horizon("30m", pair, tf_30m.confidence, risk_level)
+    expected_range_1h  = expected_range_for_horizon("1h",  pair, tf_1h.confidence,  risk_level)
+    expected_range_4h  = expected_range_for_horizon("4h",  pair, tf_4h.confidence,  risk_level)
+    expected_range_1d  = expected_range_for_horizon("1d",  pair, tf_1d.confidence,  risk_level)
     invalidation_hint = invalidation_hint_for_bias(bias)
     tradeable = tf_1h.tradeable
+
+    advanced_models = AdvancedModels(
+        hurst_exponent=tech["hurst"],
+        hurst_regime=tech["hurst_regime"],
+        linreg_slope_pct=tech["linreg_slope_pct"],
+        linreg_r2=tech["linreg_r2"],
+        vol_regime=tech["vol_regime"],
+        tech_score_5m=tech["tech_5m"],
+        tech_score_15m=tech["tech_15m"],
+        tech_score_30m=tech["tech_30m"],
+        tech_score_1h=tech["tech_1h"],
+        tech_score_4h=tech["tech_4h"],
+    )
 
     return {
         "pair": pair,
@@ -401,25 +463,43 @@ def build_raw_context_from_inputs(
             minutes_to_unblock=round(minutes_to_unblock, 1) if minutes_to_unblock is not None else None,
         ),
         "timeframe_5m": tf_5m,
+        "timeframe_15m": tf_15m,
+        "timeframe_30m": tf_30m,
         "timeframe_1h": tf_1h,
+        "timeframe_4h": tf_4h,
         "timeframe_1d": tf_1d,
         "bias_5m": tf_5m.bias,
+        "bias_15m": tf_15m.bias,
+        "bias_30m": tf_30m.bias,
         "bias_1h": tf_1h.bias,
+        "bias_4h": tf_4h.bias,
         "bias_1d": tf_1d.bias,
         "confidence_5m": tf_5m.confidence,
+        "confidence_15m": tf_15m.confidence,
+        "confidence_30m": tf_30m.confidence,
         "confidence_1h": tf_1h.confidence,
+        "confidence_4h": tf_4h.confidence,
         "confidence_1d": tf_1d.confidence,
         "score_adjust_5m": tf_5m.score_adjust,
+        "score_adjust_15m": tf_15m.score_adjust,
+        "score_adjust_30m": tf_30m.score_adjust,
         "score_adjust_1h": tf_1h.score_adjust,
+        "score_adjust_4h": tf_4h.score_adjust,
         "score_adjust_1d": tf_1d.score_adjust,
         "bias": bias,
         "confidence": confidence,
         "expected_range_5m_pips": expected_range_5m,
+        "expected_range_15m_pips": expected_range_15m,
+        "expected_range_30m_pips": expected_range_30m,
         "expected_range_1h_pips": expected_range_1h,
+        "expected_range_4h_pips": expected_range_4h,
         "expected_range_1d_pips": expected_range_1d,
         "invalidation_hint": invalidation_hint,
         "tradeable_5m": tf_5m.tradeable,
+        "tradeable_15m": tf_15m.tradeable,
+        "tradeable_30m": tf_30m.tradeable,
         "tradeable_1h": tf_1h.tradeable,
+        "tradeable_4h": tf_4h.tradeable,
         "tradeable_1d": tf_1d.tradeable,
         "tradeable": tradeable,
         "news_risk": risk_level,
@@ -442,25 +522,27 @@ def build_raw_context_from_inputs(
         "block_trading": block_trading,
         "block_reason": block_reason,
         "news_surprise_boost": surprise_boost,
+        "advanced_models": advanced_models,
         "providers": providers,
     }
 
 
 async def build_raw_context(sym: str, pair: str) -> dict:
-    shared_inputs, (sent, sent_status) = await asyncio.gather(
+    shared_inputs, (sent, sent_status), (mkt, _mkt_status) = await asyncio.gather(
         collect_shared_inputs(),
         collect_sentiment_input(pair),
+        _safe_collect("market", "Yahoo Finance", market.fetch_market(sym, pair)),
     )
-    return build_raw_context_from_inputs(sym, pair, shared_inputs, sent, sent_status)
+    return build_raw_context_from_inputs(sym, pair, shared_inputs, sent, sent_status, mkt)
 
 
 async def build_debug_context(sym: str, pair: str) -> DebugContextResponse:
     return DebugContextResponse(**(await build_raw_context(sym, pair)))
 
 
-async def build_mt4_context(sym: str, pair: str) -> Mt4ContextResponse:
-    raw = await build_raw_context(sym, pair)
+def _mt4_from_raw(sym: str, pair: str, raw: dict) -> Mt4ContextResponse:
     next_event = raw.get("next_event") or {}
+    adv = raw.get("advanced_models")
     return Mt4ContextResponse(
         symbol=sym,
         pair=pair,
@@ -468,22 +550,37 @@ async def build_mt4_context(sym: str, pair: str) -> Mt4ContextResponse:
         session=raw["session"],
         event_block=raw["event_block"],
         bias_5m=raw["bias_5m"],
+        bias_15m=raw["bias_15m"],
+        bias_30m=raw["bias_30m"],
         bias_1h=raw["bias_1h"],
+        bias_4h=raw["bias_4h"],
         bias_1d=raw["bias_1d"],
         confidence_5m=raw["confidence_5m"],
+        confidence_15m=raw["confidence_15m"],
+        confidence_30m=raw["confidence_30m"],
         confidence_1h=raw["confidence_1h"],
+        confidence_4h=raw["confidence_4h"],
         confidence_1d=raw["confidence_1d"],
         score_adjust_5m=raw["score_adjust_5m"],
+        score_adjust_15m=raw["score_adjust_15m"],
+        score_adjust_30m=raw["score_adjust_30m"],
         score_adjust_1h=raw["score_adjust_1h"],
+        score_adjust_4h=raw["score_adjust_4h"],
         score_adjust_1d=raw["score_adjust_1d"],
         bias=raw["bias"],
         confidence=raw["confidence"],
         expected_range_5m_pips=raw["expected_range_5m_pips"],
+        expected_range_15m_pips=raw["expected_range_15m_pips"],
+        expected_range_30m_pips=raw["expected_range_30m_pips"],
         expected_range_1h_pips=raw["expected_range_1h_pips"],
+        expected_range_4h_pips=raw["expected_range_4h_pips"],
         expected_range_1d_pips=raw["expected_range_1d_pips"],
         invalidation_hint=raw["invalidation_hint"],
         tradeable_5m=raw["tradeable_5m"],
+        tradeable_15m=raw["tradeable_15m"],
+        tradeable_30m=raw["tradeable_30m"],
         tradeable_1h=raw["tradeable_1h"],
+        tradeable_4h=raw["tradeable_4h"],
         tradeable_1d=raw["tradeable_1d"],
         tradeable=raw["tradeable"],
         news_risk=raw["news_risk"],
@@ -497,5 +594,19 @@ async def build_mt4_context(sym: str, pair: str) -> Mt4ContextResponse:
         score_adjust=raw["score_adjust"],
         block_trading=raw["block_trading"],
         block_reason=raw["block_reason"],
+        news_surprise_boost=raw.get("news_surprise_boost", 0),
+        hurst_exponent=adv.hurst_exponent if adv else 0.5,
+        hurst_regime=adv.hurst_regime if adv else "random",
+        vol_regime=adv.vol_regime if adv else "NORMAL",
+        tech_score_5m=adv.tech_score_5m if adv else 0.0,
+        tech_score_15m=adv.tech_score_15m if adv else 0.0,
+        tech_score_30m=adv.tech_score_30m if adv else 0.0,
+        tech_score_1h=adv.tech_score_1h if adv else 0.0,
+        tech_score_4h=adv.tech_score_4h if adv else 0.0,
         providers=raw["providers"],
     )
+
+
+async def build_mt4_context(sym: str, pair: str) -> Mt4ContextResponse:
+    raw = await build_raw_context(sym, pair)
+    return _mt4_from_raw(sym, pair, raw)

@@ -50,6 +50,9 @@ string   lastApiError = "";
 int      lastAlignedCount = 0;
 int      lastCheckedCount = 0;
 int      lastNewsBoost = 0;
+string   lastHurstRegime = "";
+string   lastVolRegime = "";
+double   lastHurst = 0.5;
 
 string NormalizeHorizon() {
    string horizon = TradeHorizon;
@@ -101,6 +104,22 @@ bool TripleAligned(string b5m, string b1h, string b1d, string &bias) {
       return(true);
    }
    return(false);
+}
+
+int AlignedCount(string b5m, string b15m, string b30m, string b1h, string b4h, string b1d) {
+   if(b5m == "NEUTRAL" && b15m == "NEUTRAL" && b30m == "NEUTRAL" &&
+      b1h == "NEUTRAL" && b4h == "NEUTRAL" && b1d == "NEUTRAL")
+      return(0);
+   string ref = b1h;
+   if(ref == "NEUTRAL") return(0);
+   int cnt = 0;
+   if(b5m  == ref) cnt++;
+   if(b15m == ref) cnt++;
+   if(b30m == ref) cnt++;
+   if(b1h  == ref) cnt++;
+   if(b4h  == ref) cnt++;
+   if(b1d  == ref) cnt++;
+   return(cnt);
 }
 
 void ApplyEmergencyStop(string sym, int dir, double price, double &sl) {
@@ -179,10 +198,11 @@ void UpdateStatusPanel() {
       "Funcionando: ", operating, " | modo=", mode, "\n",
       "Ultimo OK: ", TimeAgo(lastApiOkTime), " | Ultimo fallo: ", TimeAgo(lastApiFailTime), "\n",
       "Pares alineados: ", lastAlignedCount, "/", lastCheckedCount, "\n",
-      "Estrategia: 5M = 1H = 1D | horizonte=", NormalizeHorizon(), "\n",
+      "Estrategia: 5M=15M=30M=1H=4H=1D | horizonte=", NormalizeHorizon(), "\n",
       "Riesgo: SL emergencia=", DoubleToString(EmergencyStopPips, 1),
       " pips | trailing=", DoubleToString(TrailingStopPips, 1), " pips\n",
       "Sorpresa noticias: ", (lastNewsBoost > 0 ? "+" : ""), IntegerToString(lastNewsBoost), "\n",
+      "Hurst: ", DoubleToString(lastHurst, 3), " (", lastHurstRegime, ") | Vol: ", lastVolRegime, "\n",
       "Ultimo error: ", lastApiError
    );
 }
@@ -261,16 +281,19 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
          lastEval[i] = TimeCurrent();
          int closeAdj = 0, closeConf = 0, closeBoost = 0;
          string closeRisk = "", closeBias = "NEUTRAL";
-         string b5m = "NEUTRAL", b1h = "NEUTRAL", b1d = "NEUTRAL";
-         int c5m = 0, c1h = 0, c1d = 0;
+         string cb5m = "NEUTRAL", cb15m = "NEUTRAL", cb30m = "NEUTRAL";
+         string cb1h = "NEUTRAL", cb4h  = "NEUTRAL", cb1d  = "NEUTRAL";
+         int cc5m = 0, cc1h = 0, cc1d = 0;
          bool closeBlock = false, closeTradeable = true;
          double closeRange = 0.0;
          bool ok = FetchContext(PAIRS[i], closeAdj, closeRisk, closeBlock, closeBias, closeConf,
-                                closeTradeable, closeRange, b5m, b1h, b1d, c5m, c1h, c1d, closeBoost);
+                                closeTradeable, closeRange,
+                                cb5m, cb15m, cb30m, cb1h, cb4h, cb1d,
+                                cc5m, cc1h, cc1d, closeBoost);
          if(ok) {
             pairChecked = true;
             string alignedBias = "NEUTRAL";
-            bool aligned = TripleAligned(b5m, b1h, b1d, alignedBias);
+            bool aligned = TripleAligned(cb5m, cb1h, cb1d, alignedBias);
             pairAligned = aligned;
             int type = OrderType();
             bool opposite = (type == OP_BUY && alignedBias == "DOWN") || (type == OP_SELL && alignedBias == "UP");
@@ -292,20 +315,19 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
    string newsRisk = "";
    bool   blockTrading = false;
    string apiBias = "NEUTRAL";
-   string bias5m = "NEUTRAL";
-   string bias1h = "NEUTRAL";
-   string bias1d = "NEUTRAL";
+   string bias5m = "NEUTRAL", bias15m = "NEUTRAL", bias30m = "NEUTRAL";
+   string bias1h = "NEUTRAL", bias4h  = "NEUTRAL", bias1d  = "NEUTRAL";
    int    apiConfidence = 0;
-   int    conf5m = 0;
-   int    conf1h = 0;
-   int    conf1d = 0;
+   int    conf5m = 0, conf1h = 0, conf1d = 0;
    bool   apiTradeable = true;
    double apiRangePips = 0.0;
    bool   apiAvailable = true;
 
    if(UseDataApi)
       apiAvailable = FetchContext(PAIRS[i], apiAdj, newsRisk, blockTrading, apiBias, apiConfidence,
-                                  apiTradeable, apiRangePips, bias5m, bias1h, bias1d, conf5m, conf1h, conf1d, newsBoost);
+                                  apiTradeable, apiRangePips,
+                                  bias5m, bias15m, bias30m, bias1h, bias4h, bias1d,
+                                  conf5m, conf1h, conf1d, newsBoost);
    if(UseDataApi && apiAvailable) lastNewsBoost = newsBoost;
    if(UseDataApi && apiAvailable)
       pairChecked = true;
@@ -326,11 +348,14 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
 
    if(UseDataApi && apiAvailable && RequireTripleAlignment) {
       string alignedBias = "NEUTRAL";
-      if(!TripleAligned(bias5m, bias1h, bias1d, alignedBias)) {
-         PrintFormat("ATLAS sin alineacion triple %s 5M=%s 1H=%s 1D=%s",
-                     sym, bias5m, bias1h, bias1d);
+      int aligned6 = AlignedCount(bias5m, bias15m, bias30m, bias1h, bias4h, bias1d);
+      // Requiere al menos 4/6 timeframes alineados con bias1h
+      if(bias1h == "NEUTRAL" || aligned6 < 4) {
+         PrintFormat("ATLAS sin alineacion %s 5M=%s 15M=%s 30M=%s 1H=%s 4H=%s 1D=%s (alineados=%d/6)",
+                     sym, bias5m, bias15m, bias30m, bias1h, bias4h, bias1d, aligned6);
          return;
       }
+      alignedBias = bias1h;
       pairAligned = true;
       apiBias = alignedBias;
       apiConfidence = (int)MathMin(conf5m, MathMin(conf1h, conf1d));
@@ -600,20 +625,18 @@ string JoinUrl(string baseUrl, string path, string sym) {
 
 bool FetchContext(string sym, int &scoreAdj, string &risk, bool &blockTrading,
                   string &bias, int &confidence, bool &tradeable, double &expectedRangePips,
-                  string &bias5m, string &bias1h, string &bias1d,
+                  string &bias5m, string &bias15m, string &bias30m,
+                  string &bias1h, string &bias4h, string &bias1d,
                   int &conf5m, int &conf1h, int &conf1d, int &newsBoost) {
    scoreAdj = 0;
    newsBoost = 0;
    risk = "";
    blockTrading = false;
    bias = "NEUTRAL";
-   bias5m = "NEUTRAL";
-   bias1h = "NEUTRAL";
-   bias1d = "NEUTRAL";
+   bias5m = "NEUTRAL"; bias15m = "NEUTRAL"; bias30m = "NEUTRAL";
+   bias1h = "NEUTRAL"; bias4h  = "NEUTRAL"; bias1d  = "NEUTRAL";
    confidence = 0;
-   conf5m = 0;
-   conf1h = 0;
-   conf1d = 0;
+   conf5m = 0; conf1h = 0; conf1d = 0;
    tradeable = true;
    expectedRangePips = 0.0;
 
@@ -669,16 +692,25 @@ bool FetchContext(string sym, int &scoreAdj, string &risk, bool &blockTrading,
    if(StringFind(body, "\"tradeable_" + horizon + "\":") < 0)
       tradeable = JsonBool(body, "tradeable");
 
-   bias5m = JsonString(body, "bias_5m");
-   bias1h = JsonString(body, "bias_1h");
-   bias1d = JsonString(body, "bias_1d");
+   bias5m  = JsonString(body, "bias_5m");
+   bias15m = JsonString(body, "bias_15m");
+   bias30m = JsonString(body, "bias_30m");
+   bias1h  = JsonString(body, "bias_1h");
+   bias4h  = JsonString(body, "bias_4h");
+   bias1d  = JsonString(body, "bias_1d");
+   if(StringLen(bias5m)  == 0) bias5m  = "NEUTRAL";
+   if(StringLen(bias15m) == 0) bias15m = "NEUTRAL";
+   if(StringLen(bias30m) == 0) bias30m = "NEUTRAL";
+   if(StringLen(bias1h)  == 0) bias1h  = "NEUTRAL";
+   if(StringLen(bias4h)  == 0) bias4h  = "NEUTRAL";
+   if(StringLen(bias1d)  == 0) bias1d  = "NEUTRAL";
    conf5m = (int)JsonNumber(body, "confidence_5m");
    conf1h = (int)JsonNumber(body, "confidence_1h");
    conf1d = (int)JsonNumber(body, "confidence_1d");
-   if(StringLen(bias5m) == 0) bias5m = "NEUTRAL";
-   if(StringLen(bias1h) == 0) bias1h = "NEUTRAL";
-   if(StringLen(bias1d) == 0) bias1d = "NEUTRAL";
    newsBoost = (int)JsonNumber(body, "news_surprise_boost");
+   lastHurst       = JsonNumber(body, "hurst_exponent");
+   lastHurstRegime = JsonString(body, "hurst_regime");
+   lastVolRegime   = JsonString(body, "vol_regime");
    return(true);
 }
 

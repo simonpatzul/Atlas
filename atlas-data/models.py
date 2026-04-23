@@ -41,6 +41,19 @@ class Mt4NewsEvent(BaseModel):
     minutes_until: float
 
 
+class AdvancedModels(BaseModel):
+    hurst_exponent: float
+    hurst_regime: str
+    linreg_slope_pct: float
+    linreg_r2: float
+    vol_regime: str
+    tech_score_5m: float
+    tech_score_15m: float
+    tech_score_30m: float
+    tech_score_1h: float
+    tech_score_4h: float
+
+
 class MarketCandle(BaseModel):
     ts_utc: str
     o: float
@@ -76,22 +89,37 @@ class Mt4ContextResponse(BaseModel):
     session: SessionContext
     event_block: EventBlock
     bias_5m: Literal["UP", "DOWN", "NEUTRAL"]
+    bias_15m: Literal["UP", "DOWN", "NEUTRAL"]
+    bias_30m: Literal["UP", "DOWN", "NEUTRAL"]
     bias_1h: Literal["UP", "DOWN", "NEUTRAL"]
+    bias_4h: Literal["UP", "DOWN", "NEUTRAL"]
     bias_1d: Literal["UP", "DOWN", "NEUTRAL"]
     confidence_5m: int
+    confidence_15m: int
+    confidence_30m: int
     confidence_1h: int
+    confidence_4h: int
     confidence_1d: int
     score_adjust_5m: int
+    score_adjust_15m: int
+    score_adjust_30m: int
     score_adjust_1h: int
+    score_adjust_4h: int
     score_adjust_1d: int
     bias: Literal["UP", "DOWN", "NEUTRAL"]
     confidence: int
     expected_range_5m_pips: float
+    expected_range_15m_pips: float
+    expected_range_30m_pips: float
     expected_range_1h_pips: float
+    expected_range_4h_pips: float
     expected_range_1d_pips: float
     invalidation_hint: str | None = None
     tradeable_5m: bool
+    tradeable_15m: bool
+    tradeable_30m: bool
     tradeable_1h: bool
+    tradeable_4h: bool
     tradeable_1d: bool
     tradeable: bool
     news_risk: Literal["LOW", "MEDIUM", "HIGH"]
@@ -106,6 +134,14 @@ class Mt4ContextResponse(BaseModel):
     block_trading: bool
     block_reason: str | None = None
     news_surprise_boost: int = 0
+    hurst_exponent: float = 0.5
+    hurst_regime: str = "random"
+    vol_regime: str = "NORMAL"
+    tech_score_5m: float = 0.0
+    tech_score_15m: float = 0.0
+    tech_score_30m: float = 0.0
+    tech_score_1h: float = 0.0
+    tech_score_4h: float = 0.0
     providers: dict[str, ProviderStatus]
 
 
@@ -116,7 +152,10 @@ class DebugContextResponse(BaseModel):
     session: SessionContext
     event_block: EventBlock
     timeframe_5m: TimeframeSignal
+    timeframe_15m: TimeframeSignal
+    timeframe_30m: TimeframeSignal
     timeframe_1h: TimeframeSignal
+    timeframe_4h: TimeframeSignal
     timeframe_1d: TimeframeSignal
     bias: Literal["UP", "DOWN", "NEUTRAL"]
     confidence: int
@@ -136,4 +175,5 @@ class DebugContextResponse(BaseModel):
     score_adjust: int
     block_trading: bool
     block_reason: str | None = None
+    advanced_models: AdvancedModels | None = None
     providers: dict[str, ProviderStatus]

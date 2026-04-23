@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from collectors import market
 from config import MT4_API_KEY
 from engine import (
+    _mt4_from_raw,
     build_debug_context,
     build_mt4_context,
     build_raw_context_from_inputs,
@@ -137,46 +138,5 @@ async def mt4_context_all(x_api_key: str | None = Header(default=None)):
     results = []
     for (sym, pair), (sent, sent_status) in zip(PAIRS.items(), sentiment_results, strict=False):
         raw = build_raw_context_from_inputs(sym, pair, shared_inputs, sent, sent_status)
-        next_event = raw.get("next_event") or {}
-        results.append(
-            Mt4ContextResponse(
-                symbol=sym,
-                pair=pair,
-                ts_utc=raw["ts_utc"],
-                session=raw["session"],
-                event_block=raw["event_block"],
-                bias_5m=raw["bias_5m"],
-                bias_1h=raw["bias_1h"],
-                bias_1d=raw["bias_1d"],
-                confidence_5m=raw["confidence_5m"],
-                confidence_1h=raw["confidence_1h"],
-                confidence_1d=raw["confidence_1d"],
-                score_adjust_5m=raw["score_adjust_5m"],
-                score_adjust_1h=raw["score_adjust_1h"],
-                score_adjust_1d=raw["score_adjust_1d"],
-                bias=raw["bias"],
-                confidence=raw["confidence"],
-                expected_range_5m_pips=raw["expected_range_5m_pips"],
-                expected_range_1h_pips=raw["expected_range_1h_pips"],
-                expected_range_1d_pips=raw["expected_range_1d_pips"],
-                invalidation_hint=raw["invalidation_hint"],
-                tradeable_5m=raw["tradeable_5m"],
-                tradeable_1h=raw["tradeable_1h"],
-                tradeable_1d=raw["tradeable_1d"],
-                tradeable=raw["tradeable"],
-                news_risk=raw["news_risk"],
-                next_event_minutes=next_event.get("minutes_until"),
-                next_event_impact=next_event.get("impact"),
-                next_event_title=next_event.get("title"),
-                macro_bias=raw["macro"]["bias"],
-                cot_bias=raw["cot_bias"],
-                sentiment_bias=raw["sentiment_bias"],
-                trend_bias=raw["trend_bias"],
-                score_adjust=raw["score_adjust"],
-                block_trading=raw["block_trading"],
-                block_reason=raw["block_reason"],
-                news_surprise_boost=raw.get("news_surprise_boost", 0),
-                providers=raw["providers"],
-            )
-        )
+        results.append(_mt4_from_raw(sym, pair, raw))
     return results
