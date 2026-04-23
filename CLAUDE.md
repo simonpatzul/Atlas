@@ -107,7 +107,7 @@ COT_BIAS_DIVISOR=150000
 
 Important robustness notes:
 
-- `cache.py` must use `CACHE_DB`; on Vercel this should be `/tmp/atlas-cache.db`.
+- `cache.py` defaults to `tempfile.gettempdir()/atlas-cache.db` (i.e. `/tmp/atlas-cache.db` on Linux/Vercel). The old default of `atlas-data/cache.db` caused `sqlite3.OperationalError` on Vercel's read-only Lambda filesystem. All cache ops are wrapped in try/except so DB failures degrade gracefully. `CACHE_DB` env var still overrides the path if needed.
 - `market.py` now falls back to stale cache and then to a synthetic snapshot if Yahoo fails. This prevents frontend total failure from `/market/{symbol}`.
 - Context collectors are wrapped with `_safe_collect` in `engine.py`; provider failures should degrade context, not crash the endpoint.
 - Alpha Vantage rate limits should appear as provider failure, not app failure.
