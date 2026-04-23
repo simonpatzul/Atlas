@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 
 const PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "AUD/USD", "USD/CAD", "USD/CHF"];
 const PREDICTION_HORIZONS = {
@@ -1179,6 +1180,7 @@ export default function AtlasChart() {
           onChangePredictionHorizon={changePredictionHorizon}
         />
       </div>
+      <SpeedInsights />
     </div>
   );
 }
