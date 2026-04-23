@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+*.log
+
+atlas-data/.venv/
+atlas-data/.env
+atlas-data/cache.db
+atlas-data/cache.db-shm
+atlas-data/cache.db-wal
+atlas-data/__pycache__/
+atlas-data/collectors/__pycache__/
+
+__pycache__/
+.DS_Store
+Thumbs.db

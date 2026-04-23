@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>ATLAS · DATA CONTEXT</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Orbitron:wght@700;900&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'IBM Plex Mono',monospace;background:#030b14;color:#c8d8e8;min-height:100vh;padding:14px}
+    .logo{font-family:'Orbitron',monospace;font-size:20px;font-weight:900;letter-spacing:5px;background:linear-gradient(90deg,#00d4ff,#0044cc);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .subtitle{font-size:9px;color:#1a4060;letter-spacing:1px;margin-top:2px}
+    header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #0a1828;padding-bottom:10px;margin-bottom:12px}
+    .status{display:flex;align-items:center;gap:6px;font-size:10px;color:#3a6a88}
+    .dot{width:6px;height:6px;border-radius:50%;background:#00e87a;box-shadow:0 0 5px #00e87a;animation:pulse 1.5s infinite}
+    .dot.err{background:#ff4060;box-shadow:0 0 5px #ff4060}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+    .card{background:#070d18;border:1px solid #0c1e2e;border-radius:4px;padding:11px;display:flex;flex-direction:column;gap:7px;transition:border-color .3s}
+    .card.bull{border-color:rgba(0,232,122,.4)}
+    .card.bear{border-color:rgba(255,64,96,.4)}
+    .card.warn{border-color:rgba(255,170,0,.4)}
+    .card.flash{animation:flash .6s}
+    @keyframes flash{0%{background:#0c2030}100%{background:#070d18}}
+    .head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+    .pair{font-family:'Orbitron',monospace;font-weight:800;font-size:13px;letter-spacing:2px}
+    .adj{font-family:'Orbitron',monospace;font-weight:900;font-size:28px;line-height:1}
+    .adj.pos{color:#00e87a}.adj.neg{color:#ff4060}.adj.zero{color:#3a6a88}
+    .pill{display:inline-block;font-size:8px;padding:2px 7px;border-radius:2px;letter-spacing:1px;margin-top:4px}
+    .pill.LOW{background:rgba(0,232,122,.12);color:#00e87a;border:1px solid rgba(0,232,122,.3)}
+    .pill.MEDIUM{background:rgba(255,170,0,.12);color:#ffaa00;border:1px solid rgba(255,170,0,.3)}
+    .pill.HIGH{background:rgba(255,64,96,.12);color:#ff4060;border:1px solid rgba(255,64,96,.3)}
+    .row{display:flex;justify-content:space-between;font-size:10px;padding:3px 0;border-bottom:1px solid #080f1a}
+    .row:last-child{border:none}
+    .lbl{color:#3a6a88}
+    .val{color:#c8d8e8;font-weight:500}
+    .val.pos{color:#00e87a}.val.neg{color:#ff4060}
+    .ev-title{font-size:10px;color:#88aacc;font-weight:500}
+    .ev-meta{font-size:8px;color:#3a6a88;margin-top:2px}
+    svg.spark{width:100%;height:38px;display:block;background:#040d18;border-radius:2px}
+    .legend{font-size:8px;color:#1a4060;letter-spacing:1px;margin-top:10px;text-align:center}
+    .controls{display:flex;gap:6px;align-items:center}
+    .btn{background:#0a1828;border:1px solid #0c2030;color:#88aacc;padding:4px 9px;font-family:inherit;font-size:9px;cursor:pointer;border-radius:2px}
+    .btn:hover{border-color:#00d4ff;color:#00d4ff}
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="logo">ATLAS · DATA</div>
+      <div class="subtitle">CONTEXTO EXTERNO EN TIEMPO REAL</div>
+    </div>
+    <div class="controls">
+      <span class="status"><span id="dot" class="dot"></span><span id="status">conectando…</span></span>
+      <span class="status">refresh <span id="ival">10</span>s</span>
+      <button class="btn" id="pause">⏸ pausar</button>
+      <button class="btn" id="clear">borrar histórico</button>
+    </div>
+  </header>
+  <div class="grid" id="grid"></div>
+  <div class="legend">score_adjust = macro_bias + sentimiento − penalización_noticias · sparkline = últimos 60 valores</div>
+
+  <script>
+    const POLL_MS = 10000;
+    const HIST_MAX = 60;
+    let paused = false;
+    const HIST = JSON.parse(localStorage.getItem('atlas_hist') || '{}');
+    const LAST = {};
+
+    function pushHist(sym, val) {
+      HIST[sym] = HIST[sym] || [];
+      HIST[sym].push({t: Date.now(), v: val});
+      if (HIST[sym].length > HIST_MAX) HIST[sym].shift();
+      localStorage.setItem('atlas_hist', JSON.stringify(HIST));
+    }
+
+    function spark(arr) {
+      if (!arr || arr.length < 2) return '<svg class="spark"></svg>';
+      const W = 260, H = 38, PAD = 4;
+      const vals = arr.map(p => p.v);
+      const min = Math.min(...vals, -1), max = Math.max(...vals, 1);
+      const rng = (max - min) || 1;
+      const sx = i => PAD + (i / (arr.length - 1)) * (W - 2*PAD);
+      const sy = v => H - PAD - ((v - min) / rng) * (H - 2*PAD);
+      const pts = arr.map((p, i) => `${sx(i).toFixed(1)},${sy(p.v).toFixed(1)}`).join(' ');
+      const last = arr[arr.length-1].v;
+      const col = last > 0 ? '#00e87a' : last < 0 ? '#ff4060' : '#3a6a88';
+      const zeroY = sy(0);
+      return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#1a3a54" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round"/>
+        <circle cx="${sx(arr.length-1).toFixed(1)}" cy="${sy(last).toFixed(1)}" r="2.5" fill="${col}"/>
+      </svg>`;
+    }
+
+    function fmt(v, d=2) { return v == null ? '—' : Number(v).toFixed(d); }
+    function fmtSign(v, d=2) {
+      if (v == null) return '—';
+      const n = Number(v);
+      return (n >= 0 ? '+' : '') + n.toFixed(d);
+    }
+    function minutesUntil(min) {
+      if (min < 60) return `en ${Math.round(min)}m`;
+      const h = Math.floor(min/60), m = Math.round(min%60);
+      return `en ${h}h${m > 0 ? ' ' + m + 'm' : ''}`;
+    }
+
+    function renderCard(c) {
+      const adj = c.score_adjust;
+      const cls = adj > 2 ? 'bull' : adj < -2 ? 'bear' : c.news_risk !== 'LOW' ? 'warn' : '';
+      const adjCls = adj > 0 ? 'pos' : adj < 0 ? 'neg' : 'zero';
+      const flash = (LAST[c.symbol] != null && LAST[c.symbol] !== adj) ? ' flash' : '';
+      LAST[c.symbol] = adj;
+
+      const ev = c.next_event;
+      const cot = c.cot;
+      const m = c.macro || {};
+      const s = c.sentiment;
+
+      return `<div class="card ${cls}${flash}">
+        <div class="head">
+          <div>
+            <div class="pair">${c.symbol}</div>
+            <span class="pill ${c.news_risk}">${c.news_risk}${c.news_penalty_pts > 0 ? ' · -' + c.news_penalty_pts + 'pts' : ''}</span>
+          </div>
+          <div class="adj ${adjCls}">${fmtSign(adj, 0)}</div>
+        </div>
+        ${spark(HIST[c.symbol])}
+        ${ev ? `<div>
+          <div class="ev-title">→ ${ev.title}</div>
+          <div class="ev-meta">${ev.currency} · ${ev.impact} · ${minutesUntil(ev.minutes_until)}</div>
+        </div>` : '<div class="ev-meta" style="font-style:italic">sin eventos en 24h</div>'}
+        <div>
+          <div class="row"><span class="lbl">COT net</span><span class="val ${cot && cot.cot_net > 0 ? 'pos' : cot && cot.cot_net < 0 ? 'neg' : ''}">${cot ? fmtSign(cot.cot_net, 0) : '—'}</span></div>
+          <div class="row"><span class="lbl">COT fecha</span><span class="val">${cot ? cot.report_date : '—'}</span></div>
+          <div class="row"><span class="lbl">DXY Δ%</span><span class="val ${m.dxy_delta_pct > 0 ? 'pos' : 'neg'}">${fmtSign(m.dxy_delta_pct, 2)}</span></div>
+          <div class="row"><span class="lbl">US10Y Δ%</span><span class="val ${m.us10y_delta_pct > 0 ? 'pos' : 'neg'}">${fmtSign(m.us10y_delta_pct, 2)}</span></div>
+          <div class="row"><span class="lbl">macro bias</span><span class="val ${m.bias_pts > 0 ? 'pos' : m.bias_pts < 0 ? 'neg' : ''}">${fmtSign(m.bias_pts, 0)}pts</span></div>
+          <div class="row"><span class="lbl">sentiment</span><span class="val">${s ? fmt(s.avg_sentiment, 3) + ' (' + s.n_articles + ')' : '—'}</span></div>
+        </div>
+      </div>`;
+    }
+
+    async function tick() {
+      if (paused) return;
+      try {
+        const r = await fetch('/context-all');
+        if (!r.ok) throw new Error('http ' + r.status);
+        const data = await r.json();
+        for (const c of data) pushHist(c.symbol, c.score_adjust);
+        document.getElementById('grid').innerHTML = data.map(renderCard).join('');
+        document.getElementById('dot').classList.remove('err');
+        document.getElementById('status').textContent = 'OK · ' + new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById('dot').classList.add('err');
+        document.getElementById('status').textContent = 'error: ' + e.message;
+      }
+    }
+
+    document.getElementById('pause').onclick = (e) => {
+      paused = !paused;
+      e.target.textContent = paused ? '▶ reanudar' : '⏸ pausar';
+    };
+    document.getElementById('clear').onclick = () => {
+      localStorage.removeItem('atlas_hist');
+      for (const k in HIST) delete HIST[k];
+      tick();
+    };
+
+    tick();
+    setInterval(tick, POLL_MS);
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.git/
+.venv/
+atlas-data/.venv/
+atlas-data/__pycache__/
+atlas-data/.pytest_cache/
+atlas-data/*.db
+atlas-data/cache.db
+*.log

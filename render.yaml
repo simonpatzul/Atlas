@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: atlas-web
+    env: docker
+    dockerfilePath: ./Dockerfile.web
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: CACHE_DB
+        value: /tmp/atlas-cache.db
+      - key: FRED_API_KEY
+        sync: false
+      - key: ALPHA_API_KEY
+        sync: false
+      - key: MT4_API_KEY
+        sync: false
