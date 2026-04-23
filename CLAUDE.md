@@ -63,12 +63,19 @@ GET /?symbol=EURUSD
 
 The flat endpoint `/?symbol=EURUSD` returns MT4 context and is intended for MT4/WebRequest compatibility.
 
-Multi-horizon context:
+Multi-horizon context (6 timeframes):
 
-- `timeframe_5m`
-- `timeframe_1h`
-- `timeframe_1d`
-- MT4 fields: `bias_5m`, `bias_1h`, `bias_1d`, `confidence_*`, `score_adjust_*`, `tradeable_*`, `expected_range_*_pips`.
+- `timeframe_5m`, `timeframe_15m`, `timeframe_30m`, `timeframe_1h`, `timeframe_4h`, `timeframe_1d`
+- MT4 fields: `bias_*`, `confidence_*`, `score_adjust_*`, `tradeable_*`, `expected_range_*_pips` para cada TF.
+- Advanced models: `hurst_exponent`, `hurst_regime`, `linreg_slope_pct`, `linreg_r2`, `vol_regime`, `tech_score_*`.
+
+Technical blending weights (tech vs fundamental):
+- 5M: 70% tech / 30% fund
+- 15M: 60% / 40%
+- 30M: 50% / 50%
+- 1H: 35% / 65%
+- 4H: 20% / 80%
+- 1D: 5% / 95%
 
 Legacy fields `bias`, `confidence`, `score_adjust`, and `tradeable` map to the `1H` layer.
 
@@ -275,3 +282,8 @@ These are load-bearing constraints — don't change without flagging:
 - **SQLite cache on Vercel**: `CACHE_DB` must point to `/tmp/atlas-cache.db` (writable path on Vercel serverless).
 - **Market fallback chain**: `market.py` tries Yahoo → stale cache → synthetic snapshot, so the frontend never hard-fails on a market data outage.
 - **News surprise boost**: `forex_factory.py` computes `actual - forecast` per recent event. `engine.py` aggregates into `news_surprise_boost` (-10..+10 pts) weighted by impact (HIGH=6, MED=3, LOW=1) and direction (base currency beats = positive, quote beats = negative). Added to `score_adjust` and exposed in `Mt4ContextResponse`. MT4 EA reads it from JSON and adds it to `combined` score, and displays it in the status panel as "Sorpresa noticias: +N".
+- **Hurst Exponent**: R/S analysis on 5M closes. >0.6 = trending, <0.4 = mean-reverting. Computed in `market.py:hurst_exponent()`.
+- **Linear Regression**: `market.py:linreg_slope_r2()` returns normalized slope and R² over 20 bars. Measures trend quality and direction.
+- **Volatility Regime**: `market.py:vol_regime_from_candles()` classifies current ATR vs p25/p75 as LOW/NORMAL/HIGH.
+- **Tech Score per TF**: `market.py:tech_score_from_candles()` returns -1..+1 from EMA9/21/50 stack (45%), RSI (30%), price-vs-MA50 (25%). Computed for 5M, 15M, 30M, 1H, 4H.
+- **6-way alignment in MT4 EA**: `AlignedCount()` counts how many of 6 TFs agree with bias_1h direction. Requires ≥4/6 aligned (was 3-way). Status panel shows Hurst and vol regime.
