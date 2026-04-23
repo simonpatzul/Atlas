@@ -26,7 +26,7 @@ extern double  TrailingStepPips  = 2.0;
 
 extern bool    UseDataApi       = true;
 extern bool    RequireApiForTrading = true;
-extern string  DataApiUrl       = "http://127.0.0.1:8000/";
+extern string  DataApiUrl       = "https://atlas-delta-nine.vercel.app/api/";
 extern string  BackupDataApiUrl = "";
 extern string  DataApiPath      = "";
 extern bool    UseFlatApiUrl    = true;
