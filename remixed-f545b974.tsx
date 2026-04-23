@@ -22,7 +22,10 @@ const rsiCol = (value) =>
 const biasLabel = (bias) =>
   bias === "UP" ? "ALCISTA" : bias === "DOWN" ? "BAJISTA" : "NEUTRO";
 
-const API_BASE = (import.meta.env.VITE_ATLAS_API_BASE || "").replace(/\/$/, "");
+const API_BASE = (
+  import.meta.env.VITE_ATLAS_API_BASE ||
+  (typeof window !== "undefined" && window.location.hostname.endsWith(".vercel.app") ? "/api" : "")
+).replace(/\/$/, "");
 
 async function fetchJson(path) {
   const response = await fetch(`${API_BASE}${path}`);
