@@ -2,6 +2,14 @@
 
 El problema con MT4 no es ATLAS: la API local responde, pero MetaTrader esta bloqueando `127.0.0.1`. La solucion practica es publicar el backend en HTTPS y usar esa URL en el EA.
 
+## Opcion gratis recomendada
+
+Si quieres evitar cobros, usa Koyeb Free. Sigue la guia:
+
+```text
+KOYEB_DEPLOY.md
+```
+
 ## Opcion recomendada: Render
 
 Este repo ya incluye `render.yaml` y `Dockerfile.web`. Ese despliegue publica en un solo dominio:
