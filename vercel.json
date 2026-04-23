@@ -1,5 +1,10 @@
 {
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" }
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/health", "destination": "/api/index" },
+    { "source": "/context/:path*", "destination": "/api/index" },
+    { "source": "/context-all", "destination": "/api/index" },
+    { "source": "/market/:path*", "destination": "/api/index" },
+    { "source": "/mt4/:path*", "destination": "/api/index" }
   ]
 }
