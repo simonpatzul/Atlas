@@ -186,7 +186,8 @@ MT4_API_KEY=optional
 
 Files used by Vercel:
 
-- `vercel.json`: declares `python3.12` runtime for `api/index.py` and rewrites all `/api/*` traffic to that function. **Python runtime must be specified explicitly** — the backend uses `str | None` union syntax (Python 3.10+) which fails silently on Vercel's default Python 3.9, causing every `/api/*` request to 404.
+- `vercel.json`: uses `version:2` with explicit `builds` + `routes`. **Do NOT use `rewrites`** — with rewrites, Vercel may pass the destination path (e.g., `/api/index`) into `scope["path"]` instead of the original request path, causing FastAPI to 404 on all routes. Explicit `routes` with `dest: "/api/index.py"` passes the original path correctly.
+- `.python-version`: pins Python 3.12. The backend uses `str | None` syntax (Python 3.10+); Vercel's default Python 3.9 would silently fail to build the function.
 - `api/index.py`: imports FastAPI app and strips `/api` prefix from `scope["path"]` before forwarding to the ASGI app.
 - root `requirements.txt`: must list dependencies explicitly. Do not use `-r atlas-data/requirements.txt`.
 
@@ -200,7 +201,7 @@ https://YOUR_DOMAIN.vercel.app/api/market/EURUSD
 https://YOUR_DOMAIN.vercel.app/api/?symbol=EURUSD
 ```
 
-If `/api/*` returns 404: first check that `vercel.json` has `"functions": { "api/index.py": { "runtime": "python3.12" } }`. A missing or wrong Python version means the function never builds.
+If `/api/*` returns 404: verify `vercel.json` uses `builds`+`routes` (not `rewrites`), and that `.python-version` is `3.12`.
 
 ## Local Development
 
