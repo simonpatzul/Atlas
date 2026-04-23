@@ -117,6 +117,35 @@ def invalidation_hint_for_bias(bias: str) -> str | None:
     return None
 
 
+def news_surprise_boost(recent_events: list[dict], pair: str) -> int:
+    """
+    Ajuste de score basado en sorpresas de noticias publicadas en la última hora.
+    Positivo = alcista para el par, negativo = bajista.
+    Lógica: sorpresa positiva en divisa base → alcista; en divisa cotizada → bajista.
+    """
+    if not recent_events or "/" not in pair:
+        return 0
+    base, quote = pair.split("/")
+    boost = 0.0
+    for e in recent_events:
+        surprise = e.get("surprise")
+        impact = (e.get("impact") or "").lower()
+        currency = (e.get("currency") or "").upper()
+        if surprise is None or surprise == 0:
+            continue
+        if currency == base:
+            direction = 1.0
+        elif currency == quote:
+            direction = -1.0
+        else:
+            continue
+        weight = {"high": 6.0, "medium": 3.0, "low": 1.0}.get(impact, 1.0)
+        # Normalizar sorpresa: la mayoría < 1 unidad, cap en 3
+        normalized = max(-1.0, min(1.0, surprise / 3.0))
+        boost += direction * normalized * weight
+    return max(-10, min(10, int(round(boost))))
+
+
 def block_reason_for_event(event: dict | None) -> tuple[str | None, float | None]:
     if not event:
         return None, None
@@ -287,8 +316,10 @@ def build_raw_context_from_inputs(
     macro_status = shared_inputs["macro_status"]
 
     events = forex_factory.events_for_pair(calendar_data or [], pair, hours_ahead=24)
+    recent_events = forex_factory.recent_events_for_pair(calendar_data or [], pair)
     risk_level, news_penalty = news_risk_level(events)
     next_event = events[0] if events else None
+    surprise_boost = news_surprise_boost(recent_events, pair)
 
     cot_pair = (cot_data or {}).get(pair)
     macro_bias = fred.macro_bias_for_pair(macro or {}, pair)
@@ -300,7 +331,7 @@ def build_raw_context_from_inputs(
     sent_pts = round(sentiment_bias * 8)
     cot_pts = round(cot_bias * 6)
     trend_pts = round(trend_bias * 10)
-    score_adjust = macro_pts + sent_pts + cot_pts + trend_pts - news_penalty
+    score_adjust = macro_pts + sent_pts + cot_pts + trend_pts - news_penalty + surprise_boost
 
     providers = {
         "calendar": calendar_status,
@@ -410,6 +441,7 @@ def build_raw_context_from_inputs(
         "score_adjust": tf_1h.score_adjust,
         "block_trading": block_trading,
         "block_reason": block_reason,
+        "news_surprise_boost": surprise_boost,
         "providers": providers,
     }
 

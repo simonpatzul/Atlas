@@ -105,6 +105,7 @@ class Mt4ContextResponse(BaseModel):
     score_adjust: int
     block_trading: bool
     block_reason: str | None = None
+    news_surprise_boost: int = 0
     providers: dict[str, ProviderStatus]
 
 

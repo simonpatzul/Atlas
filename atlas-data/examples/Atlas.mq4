@@ -49,6 +49,7 @@ datetime lastApiFailTime = 0;
 string   lastApiError = "";
 int      lastAlignedCount = 0;
 int      lastCheckedCount = 0;
+int      lastNewsBoost = 0;
 
 string NormalizeHorizon() {
    string horizon = TradeHorizon;
@@ -181,6 +182,7 @@ void UpdateStatusPanel() {
       "Estrategia: 5M = 1H = 1D | horizonte=", NormalizeHorizon(), "\n",
       "Riesgo: SL emergencia=", DoubleToString(EmergencyStopPips, 1),
       " pips | trailing=", DoubleToString(TrailingStopPips, 1), " pips\n",
+      "Sorpresa noticias: ", (lastNewsBoost > 0 ? "+" : ""), IntegerToString(lastNewsBoost), "\n",
       "Ultimo error: ", lastApiError
    );
 }
@@ -257,14 +259,14 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
       }
       if(UseDataApi && CloseOnApiDisagreement && TimeCurrent() - lastEval[i] >= EvalEverySec) {
          lastEval[i] = TimeCurrent();
-         int closeAdj = 0, closeConf = 0;
+         int closeAdj = 0, closeConf = 0, closeBoost = 0;
          string closeRisk = "", closeBias = "NEUTRAL";
          string b5m = "NEUTRAL", b1h = "NEUTRAL", b1d = "NEUTRAL";
          int c5m = 0, c1h = 0, c1d = 0;
          bool closeBlock = false, closeTradeable = true;
          double closeRange = 0.0;
          bool ok = FetchContext(PAIRS[i], closeAdj, closeRisk, closeBlock, closeBias, closeConf,
-                                closeTradeable, closeRange, b5m, b1h, b1d, c5m, c1h, c1d);
+                                closeTradeable, closeRange, b5m, b1h, b1d, c5m, c1h, c1d, closeBoost);
          if(ok) {
             pairChecked = true;
             string alignedBias = "NEUTRAL";
@@ -286,6 +288,7 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
    lastEval[i] = TimeCurrent();
 
    int    apiAdj = 0;
+   int    newsBoost = 0;
    string newsRisk = "";
    bool   blockTrading = false;
    string apiBias = "NEUTRAL";
@@ -302,7 +305,8 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
 
    if(UseDataApi)
       apiAvailable = FetchContext(PAIRS[i], apiAdj, newsRisk, blockTrading, apiBias, apiConfidence,
-                                  apiTradeable, apiRangePips, bias5m, bias1h, bias1d, conf5m, conf1h, conf1d);
+                                  apiTradeable, apiRangePips, bias5m, bias1h, bias1d, conf5m, conf1h, conf1d, newsBoost);
+   if(UseDataApi && apiAvailable) lastNewsBoost = newsBoost;
    if(UseDataApi && apiAvailable)
       pairChecked = true;
 
@@ -335,7 +339,7 @@ void ManagePair(int i, string sym, bool &pairAligned, bool &pairChecked) {
 
    int techScore = CalcTechScore(sym);
    int confScore = CalcConfluenceScore(i, sym);
-   int combined  = (int)MathRound(confScore * 0.40 + techScore * 0.60) + apiAdj;
+   int combined  = (int)MathRound(confScore * 0.40 + techScore * 0.60) + apiAdj + newsBoost;
    if(combined < 0)   combined = 0;
    if(combined > 100) combined = 100;
 
@@ -597,8 +601,9 @@ string JoinUrl(string baseUrl, string path, string sym) {
 bool FetchContext(string sym, int &scoreAdj, string &risk, bool &blockTrading,
                   string &bias, int &confidence, bool &tradeable, double &expectedRangePips,
                   string &bias5m, string &bias1h, string &bias1d,
-                  int &conf5m, int &conf1h, int &conf1d) {
+                  int &conf5m, int &conf1h, int &conf1d, int &newsBoost) {
    scoreAdj = 0;
+   newsBoost = 0;
    risk = "";
    blockTrading = false;
    bias = "NEUTRAL";
@@ -673,6 +678,7 @@ bool FetchContext(string sym, int &scoreAdj, string &risk, bool &blockTrading,
    if(StringLen(bias5m) == 0) bias5m = "NEUTRAL";
    if(StringLen(bias1h) == 0) bias1h = "NEUTRAL";
    if(StringLen(bias1d) == 0) bias1d = "NEUTRAL";
+   newsBoost = (int)JsonNumber(body, "news_surprise_boost");
    return(true);
 }
 

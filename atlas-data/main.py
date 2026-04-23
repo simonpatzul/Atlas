@@ -175,6 +175,7 @@ async def mt4_context_all(x_api_key: str | None = Header(default=None)):
                 score_adjust=raw["score_adjust"],
                 block_trading=raw["block_trading"],
                 block_reason=raw["block_reason"],
+                news_surprise_boost=raw.get("news_surprise_boost", 0),
                 providers=raw["providers"],
             )
         )

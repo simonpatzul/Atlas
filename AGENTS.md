@@ -74,8 +74,8 @@ Vercel is the current free deployment target:
 - Output Directory: `dist`.
 - Root `requirements.txt` must list Python dependencies explicitly; do not use `-r atlas-data/requirements.txt` because Vercel failed parsing that include.
 - `api/index.py` exposes the FastAPI `app` from `atlas-data/main.py`.
-- `vercel.json` rewrites `/api/*`, `/health`, `/context/*`, `/context-all`, `/market/*`, and `/mt4/*` to the Vercel Python function.
-- **`vercel.json` must declare `"functions": { "api/index.py": { "runtime": "python3.12" } }`**. The backend uses `str | None` union type syntax (Python 3.10+). Vercel's default is Python 3.9, which cannot parse this — the function silently fails to build and all `/api/*` routes return 404. Never remove or downgrade the runtime declaration.
+- `vercel.json` uses `version:2` with explicit `builds`+`routes` (NOT `rewrites`). With `rewrites`, Vercel passes the destination path into `scope["path"]` instead of the original request path, so FastAPI never matches any route and everything 404s. With explicit `routes` + `dest: "/api/index.py"`, the original path is forwarded correctly.
+- `.python-version` must be `3.12`. The backend uses `str | None` syntax (Python 3.10+); Vercel's default Python 3.9 silently fails to build the function. **Never remove `.python-version` or downgrade it.**
 
 Vercel environment variables:
 
@@ -93,10 +93,10 @@ Vercel checks:
 - `https://YOUR_DOMAIN.vercel.app/api/context/EURUSD`
 - `https://YOUR_DOMAIN.vercel.app/api/?symbol=EURUSD`
 
-MT4 should use the flat API URL for maximum compatibility:
+MT4 usa el flat API URL (confirmado funcionando):
 
-- WebRequest allowlist: `https://YOUR_DOMAIN.vercel.app/api/`
-- `DataApiUrl = https://YOUR_DOMAIN.vercel.app/api/`
+- WebRequest allowlist: `https://atlas-delta-nine.vercel.app/`
+- `DataApiUrl = https://atlas-delta-nine.vercel.app/api/`
 - `BackupDataApiUrl =`
 - `DataApiPath =`
 - `UseFlatApiUrl = true`
@@ -142,7 +142,7 @@ Important inputs:
 - `TrailingStopPips = 8.0`
 - `TrailingStepPips = 2.0`
 
-The EA was copied into multiple local MetaTrader `MQL4\Experts` folders during the session, but future code changes still need recopying or manual replacement before MetaEditor compile.
+After any change to `atlas-data/examples/Atlas.mq4`, copy the file to `C:\Users\oscar\AppData\Roaming\MetaQuotes\Terminal\144726D86E6A9AA7C9A410DD1EA591F4\MQL4\Experts\`, then compilar con F7 en MetaEditor y recargar el EA en el gráfico. El EA por defecto ya apunta a `https://atlas-delta-nine.vercel.app/api/`.
 
 ## Commit & Pull Request Guidelines
 
