@@ -156,7 +156,7 @@ https://atlas-delta-nine.vercel.app/
 
 Para desplegar el EA: copiar `atlas-data/examples/Atlas.mq4` a la carpeta `MQL4\Experts` de MetaTrader, compilar con F7 en MetaEditor y recargar en el gráfico. La ruta del usuario es `C:\Users\oscar\AppData\Roaming\MetaQuotes\Terminal\144726D86E6A9AA7C9A410DD1EA591F4\MQL4\Experts`.
 
-El panel de estado muestra: API conectada/desconectada, último OK/fallo, pares alineados, último error y configuración de riesgo.
+El panel de estado muestra: API conectada/desconectada, último OK/fallo, pares alineados, sorpresa noticias, último error y configuración de riesgo.
 
 ## Vercel Deployment
 
@@ -274,3 +274,4 @@ These are load-bearing constraints — don't change without flagging:
 - **Vercel `/api` prefix**: `api/index.py` strips `/api` before forwarding to FastAPI; `vercel.json` uses `builds`+`routes` (not `rewrites`). If adding new routes, add the `src` pattern to `vercel.json` routes AND verify `api/index.py` strips the prefix correctly.
 - **SQLite cache on Vercel**: `CACHE_DB` must point to `/tmp/atlas-cache.db` (writable path on Vercel serverless).
 - **Market fallback chain**: `market.py` tries Yahoo → stale cache → synthetic snapshot, so the frontend never hard-fails on a market data outage.
+- **News surprise boost**: `forex_factory.py` computes `actual - forecast` per recent event. `engine.py` aggregates into `news_surprise_boost` (-10..+10 pts) weighted by impact (HIGH=6, MED=3, LOW=1) and direction (base currency beats = positive, quote beats = negative). Added to `score_adjust` and exposed in `Mt4ContextResponse`. MT4 EA reads it from JSON and adds it to `combined` score, and displays it in the status panel as "Sorpresa noticias: +N".
