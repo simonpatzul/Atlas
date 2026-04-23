@@ -75,6 +75,7 @@ Vercel is the current free deployment target:
 - Root `requirements.txt` must list Python dependencies explicitly; do not use `-r atlas-data/requirements.txt` because Vercel failed parsing that include.
 - `api/index.py` exposes the FastAPI `app` from `atlas-data/main.py`.
 - `vercel.json` rewrites `/api/*`, `/health`, `/context/*`, `/context-all`, `/market/*`, and `/mt4/*` to the Vercel Python function.
+- **`vercel.json` must declare `"functions": { "api/index.py": { "runtime": "python3.12" } }`**. The backend uses `str | None` union type syntax (Python 3.10+). Vercel's default is Python 3.9, which cannot parse this — the function silently fails to build and all `/api/*` routes return 404. Never remove or downgrade the runtime declaration.
 
 Vercel environment variables:
 

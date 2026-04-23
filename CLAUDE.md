@@ -186,8 +186,8 @@ MT4_API_KEY=optional
 
 Files used by Vercel:
 
-- `vercel.json`: rewrites to Python function.
-- `api/index.py`: imports FastAPI app and strips `/api` prefix.
+- `vercel.json`: declares `python3.12` runtime for `api/index.py` and rewrites all `/api/*` traffic to that function. **Python runtime must be specified explicitly** — the backend uses `str | None` union syntax (Python 3.10+) which fails silently on Vercel's default Python 3.9, causing every `/api/*` request to 404.
+- `api/index.py`: imports FastAPI app and strips `/api` prefix from `scope["path"]` before forwarding to the ASGI app.
 - root `requirements.txt`: must list dependencies explicitly. Do not use `-r atlas-data/requirements.txt`.
 
 Useful Vercel checks:
@@ -200,7 +200,7 @@ https://YOUR_DOMAIN.vercel.app/api/market/EURUSD
 https://YOUR_DOMAIN.vercel.app/api/?symbol=EURUSD
 ```
 
-If `/api/context/EURUSD` or `/api/market/EURUSD` returns 404, inspect `api/index.py` and `vercel.json` first.
+If `/api/*` returns 404: first check that `vercel.json` has `"functions": { "api/index.py": { "runtime": "python3.12" } }`. A missing or wrong Python version means the function never builds.
 
 ## Local Development
 
@@ -263,11 +263,15 @@ Known limitation: this local Codex sandbox previously failed Vite/esbuild with `
 - Do not commit secrets or local `.env`.
 - Do not commit `node_modules`, `.venv`, `dist`, `cache.db`, or `__pycache__`.
 
-## Recent Fixes To Preserve
+## Architectural Invariants
 
-- Multi-horizon backend and frontend prediction support.
-- Vercel `/api` prefix stripping in `api/index.py`.
-- Vercel route rewrites in `vercel.json`.
-- SQLite cache path via `CACHE_DB`.
-- Market fallback on Yahoo failure.
-- MT4 flat API URL and status panel.
+These are load-bearing constraints — don't change without flagging:
+
+- **Score thresholds**: `score >= 65` = bullish drift, `<= 35` = bearish, otherwise neutral. `>= 62` = operate threshold; `>= 75` = "very strong". Keep consistent across frontend and backend scoring logic.
+- **Combined score weighting**: `confluence * 0.40 + technical * 0.60` (see `combinedScore` in `AtlasChart`).
+- **`useMemo` on all indicators**: the 1.6s live-price interval re-renders constantly — any indicator not memoized on `closes`/`candles` will stutter.
+- **Monte Carlo percentile semantics**: `p5` = SL, `p50` = target, `p75` = TP, `p90` = TP2. Preserve these if tweaking `monteCarlo()`.
+- **Decimal precision**: always route through `getDec(pair)` / `fmt(pair, v)` — never hardcode `.toFixed(4)` (breaks JPY and XAU).
+- **Vercel `/api` prefix**: `api/index.py` strips `/api` before forwarding to FastAPI; `vercel.json` rewrites both direct API paths and `/api/*`. If adding new routes, verify both files.
+- **SQLite cache on Vercel**: `CACHE_DB` must point to `/tmp/atlas-cache.db` (writable path on Vercel serverless).
+- **Market fallback chain**: `market.py` tries Yahoo → stale cache → synthetic snapshot, so the frontend never hard-fails on a market data outage.
