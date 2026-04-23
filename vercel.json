@@ -1,13 +1,16 @@
 {
-  "functions": {
-    "api/index.py": { "runtime": "python3.12" }
-  },
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/health", "destination": "/api/index" },
-    { "source": "/context/:path*", "destination": "/api/index" },
-    { "source": "/context-all", "destination": "/api/index" },
-    { "source": "/market/:path*", "destination": "/api/index" },
-    { "source": "/mt4/:path*", "destination": "/api/index" }
+  "version": 2,
+  "builds": [
+    { "src": "api/index.py", "use": "@vercel/python" },
+    { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+  ],
+  "routes": [
+    { "src": "/api(.*)", "dest": "/api/index.py" },
+    { "src": "/health", "dest": "/api/index.py" },
+    { "src": "/context(.*)", "dest": "/api/index.py" },
+    { "src": "/market(.*)", "dest": "/api/index.py" },
+    { "src": "/mt4(.*)", "dest": "/api/index.py" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

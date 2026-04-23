@@ -8,9 +8,10 @@ from main import app as atlas_app  # noqa: E402
 
 
 async def app(scope, receive, send):
-    if scope["type"] == "http" and scope.get("path", "").startswith("/api"):
-        scope = dict(scope)
-        stripped_path = scope["path"][4:] or "/"
-        scope["path"] = stripped_path
-        scope["raw_path"] = stripped_path.encode("utf-8")
+    if scope["type"] == "http":
+        path = scope.get("path", "/")
+        # Strip /api prefix when present so FastAPI receives /context/..., /market/..., etc.
+        if path.startswith("/api"):
+            stripped = path[4:] or "/"
+            scope = {**scope, "path": stripped, "raw_path": stripped.encode()}
     await atlas_app(scope, receive, send)
