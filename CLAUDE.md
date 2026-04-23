@@ -37,11 +37,7 @@ Important behavior:
   - `/api` automatically on `.vercel.app`.
   - empty locally, where Vite proxy handles backend routes.
 
-Current Vercel issue history:
-
-- The frontend originally called `/context/EURUSD` directly and Vercel returned 404.
-- `vercel.json` now rewrites direct API-like paths and `/api/*`.
-- `api/index.py` strips `/api` before handing requests to FastAPI.
+Vercel deployment is live at `https://atlas-delta-nine.vercel.app`. Frontend, backend API, and MT4 EA are all confirmed working.
 
 ## Backend
 
@@ -143,22 +139,24 @@ TrailingStepPips = 2.0
 UseFlatApiUrl = true
 ```
 
-For Vercel:
+For Vercel (valores por defecto actuales en el .mq4):
 
 ```text
-DataApiUrl = https://YOUR_DOMAIN.vercel.app/api/
+DataApiUrl = https://atlas-delta-nine.vercel.app/api/
 BackupDataApiUrl =
 DataApiPath =
 UseFlatApiUrl = true
 ```
 
-MT4 WebRequest allowlist:
+MT4 WebRequest allowlist (Tools → Options → Expert Advisors):
 
 ```text
-https://YOUR_DOMAIN.vercel.app/api/
+https://atlas-delta-nine.vercel.app/
 ```
 
-The EA status panel should show whether the API is connected, last OK/failure time, aligned pair count, last error, and risk settings.
+Para desplegar el EA: copiar `atlas-data/examples/Atlas.mq4` a la carpeta `MQL4\Experts` de MetaTrader, compilar con F7 en MetaEditor y recargar en el gráfico. La ruta del usuario es `C:\Users\oscar\AppData\Roaming\MetaQuotes\Terminal\144726D86E6A9AA7C9A410DD1EA591F4\MQL4\Experts`.
+
+El panel de estado muestra: API conectada/desconectada, último OK/fallo, pares alineados, último error y configuración de riesgo.
 
 ## Vercel Deployment
 
@@ -273,6 +271,6 @@ These are load-bearing constraints — don't change without flagging:
 - **`useMemo` on all indicators**: the 1.6s live-price interval re-renders constantly — any indicator not memoized on `closes`/`candles` will stutter.
 - **Monte Carlo percentile semantics**: `p5` = SL, `p50` = target, `p75` = TP, `p90` = TP2. Preserve these if tweaking `monteCarlo()`.
 - **Decimal precision**: always route through `getDec(pair)` / `fmt(pair, v)` — never hardcode `.toFixed(4)` (breaks JPY and XAU).
-- **Vercel `/api` prefix**: `api/index.py` strips `/api` before forwarding to FastAPI; `vercel.json` rewrites both direct API paths and `/api/*`. If adding new routes, verify both files.
+- **Vercel `/api` prefix**: `api/index.py` strips `/api` before forwarding to FastAPI; `vercel.json` uses `builds`+`routes` (not `rewrites`). If adding new routes, add the `src` pattern to `vercel.json` routes AND verify `api/index.py` strips the prefix correctly.
 - **SQLite cache on Vercel**: `CACHE_DB` must point to `/tmp/atlas-cache.db` (writable path on Vercel serverless).
 - **Market fallback chain**: `market.py` tries Yahoo → stale cache → synthetic snapshot, so the frontend never hard-fails on a market data outage.
