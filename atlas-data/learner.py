@@ -18,10 +18,15 @@ gets a higher weight in the next prediction.
 Storage: shared SQLite DB (CACHE_DB / /tmp/atlas-cache.db).
 """
 import logging
+import os
+import sqlite3
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
-from cache import DB  # reuse same SQLite file
+# Reuse the same SQLite file as cache.py (CACHE_DB env var or /tmp default)
+DB = Path(os.getenv("CACHE_DB") or str(Path(tempfile.gettempdir()) / "atlas-cache.db"))
 
 logger = logging.getLogger("atlas-learner")
 
@@ -48,7 +53,6 @@ RECORD_THROTTLE_FACTOR = 2 # only record a new prediction if last one is > horiz
 
 
 def _conn():
-    import sqlite3
     c = sqlite3.connect(str(DB), timeout=15, isolation_level=None)
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA synchronous=NORMAL")
