@@ -151,6 +151,7 @@ async def root(symbol: str | None = Query(default=None), x_api_key: str | None =
 async def health():
     return {
         "ok": True,
+        "version": "0.3.0",
         "auth_enabled": bool(MT4_ALLOWED_API_KEYS),
         "pairs": sorted(PAIRS.keys()),
     }
