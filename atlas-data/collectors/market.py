@@ -98,8 +98,9 @@ def _rsi_value(closes: list[float], period: int = 14) -> float | None:
 
 def tech_score_from_candles(candles: list[dict]) -> float:
     """
-    Score técnico -1..+1 basado en alineación EMA, RSI y posición vs MA50.
+    Score técnico -1..+1 combinando EMA stack, RSI, posición MA50, Z-score y LinReg slope.
     Requiere mínimo 52 velas.
+    Pesos: EMA stack 35%, RSI 25%, MA50 dist 20%, Z-score 10%, LinReg slope 10%.
     """
     if len(candles) < 52:
         return 0.0
@@ -111,6 +112,7 @@ def tech_score_from_candles(candles: list[dict]) -> float:
         return 0.0
     price, v9, v21, v50 = closes[-1], e9[-1], e21[-1], e50[-1]
 
+    # EMA stack — dirección de tendencia
     if v9 > v21 > v50:
         stack = 1.0
     elif v9 < v21 < v50:
@@ -118,6 +120,7 @@ def tech_score_from_candles(candles: list[dict]) -> float:
     else:
         stack = 0.35 * (1 if v9 > v21 else -1)
 
+    # RSI — sobrecompra/sobreventa
     rsi_v = _rsi_value(closes)
     if rsi_v is None:
         rsi_sig = 0.0
@@ -132,10 +135,28 @@ def tech_score_from_candles(candles: list[dict]) -> float:
     else:
         rsi_sig = 0.0
 
+    # Distancia a MA50 — posición de precio
     pct = (price - v50) / v50 if v50 else 0.0
     ma_sig = max(-1.0, min(1.0, pct * 150))
 
-    score = stack * 0.45 + rsi_sig * 0.30 + ma_sig * 0.25
+    # Z-score vs media 20 barras — extensión estadística
+    z_window = min(20, len(closes))
+    recent = closes[-z_window:]
+    zmean = sum(recent) / z_window
+    zstd = sqrt(sum((c - zmean) ** 2 for c in recent) / z_window)
+    zscore_sig = max(-1.0, min(1.0, (price - zmean) / (zstd * 2.0))) if zstd > 0 else 0.0
+
+    # LinReg slope — momento direccional de corto plazo
+    slope, _r2 = linreg_slope_r2(closes, 20)
+    slope_sig = max(-1.0, min(1.0, slope * 50.0))
+
+    score = (
+        stack * 0.35
+        + rsi_sig * 0.25
+        + ma_sig * 0.20
+        + zscore_sig * 0.10
+        + slope_sig * 0.10
+    )
     return round(max(-1.0, min(1.0, score)), 4)
 
 
@@ -306,7 +327,7 @@ def _build_snapshot(symbol: str, pair: str, ticker: str, payload: dict) -> dict:
     if len(candles) < 30:
         raise RuntimeError("market_not_enough_candles")
 
-    candles = candles[-60:]
+    candles = candles[-120:]
     price = candles[-1]["c"]
     previous_close = meta.get("chartPreviousClose") or candles[-2]["c"]
     previous_close = float(previous_close)

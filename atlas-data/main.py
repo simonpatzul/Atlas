@@ -90,6 +90,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if path == "/" or path.startswith("/mt4/"):
             client = request.client.host if request.client else "unknown"
             now = time()
+            if len(self._buckets) > 500:
+                expired = [k for k, (start, _) in self._buckets.items() if now - start >= self.window_seconds * 2]
+                for k in expired:
+                    del self._buckets[k]
             bucket_start, count = self._buckets.get(client, (now, 0))
             if now - bucket_start >= self.window_seconds:
                 bucket_start, count = now, 0

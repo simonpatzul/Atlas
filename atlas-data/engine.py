@@ -219,80 +219,105 @@ def timeframe_signal(
     block_trading: bool,
     session: SessionContext,
     tech_score: float = 0.0,
+    hurst: float = 0.5,
+    vol_regime: str = "NORMAL",
 ) -> TimeframeSignal:
     """
     Calcula señal para un horizonte combinando fundamentales + score técnico de velas.
-    tech_score: -1..+1 desde indicadores de precio (EMA, RSI, posición MA50).
-    Pesos técnicos: 5m=70%, 15m=60%, 30m=50%, 1h=35%, 4h=20%, 1d=5%.
+    tech_score: -1..+1 desde indicadores de precio (EMA, RSI, MA50, Z-score, LinReg).
+    Pesos base tech: 5m=70%, 15m=60%, 30m=50%, 1h=35%, 4h=20%, 1d=5%.
+    Ajuste de régimen Hurst: trending (+10% tech), mean_reverting (-10% tech).
+    Ajuste vol: HIGH -> confianza -5, LOW -> confianza +3.
     """
+    # Ajuste de peso técnico según régimen de Hurst
+    if hurst > 0.6:
+        hurst_adj = 0.10   # mercado en tendencia → más peso a señales de precio
+    elif hurst < 0.4:
+        hurst_adj = -0.10  # reversión a la media → más peso a fundamentales
+    else:
+        hurst_adj = 0.0
+
+    def _vol_adj(conf: int) -> int:
+        if vol_regime == "HIGH":
+            return max(0, conf - 5)
+        if vol_regime == "LOW":
+            return min(100, conf + 3)
+        return conf
+
     if horizon == "5m":
-        blended = trend_bias * 0.30 + tech_score * 0.70
+        tw = min(0.90, max(0.50, 0.70 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 8 + sentiment_bias * 3 - news_penalty * 1.3)
         if session.is_overlap:
             score_adjust += 2
         if session.is_fix_window:
             score_adjust -= 3
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             28 + abs(tech_score) * 22 + abs(trend_bias) * 14 + abs(sentiment_bias) * 10 - news_penalty * 1.5
-        ))))
+        )))))
         bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 35 and risk_level != "HIGH"
         summary = "microstructure_momentum"
 
     elif horizon == "15m":
-        blended = trend_bias * 0.40 + tech_score * 0.60
+        tw = min(0.80, max(0.40, 0.60 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 9 + sentiment_bias * 4 - news_penalty * 1.1)
         if session.is_overlap:
             score_adjust += 2
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             32 + abs(tech_score) * 20 + abs(trend_bias) * 16 + abs(sentiment_bias) * 8 - news_penalty * 1.3
-        ))))
+        )))))
         bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 38 and risk_level != "HIGH"
         summary = "short_momentum"
 
     elif horizon == "30m":
-        blended = trend_bias * 0.50 + tech_score * 0.50
+        tw = min(0.70, max(0.30, 0.50 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 10 + macro_bias * 5 + cot_bias * 3 - news_penalty * 0.9)
         if session.is_overlap:
             score_adjust += 2
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             36 + abs(tech_score) * 16 + abs(trend_bias) * 16 + abs(macro_bias) * 8 - news_penalty * 1.0
-        ))))
+        )))))
         bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 42
         summary = "intraday_flow"
 
     elif horizon == "4h":
-        blended = trend_bias * 0.80 + tech_score * 0.20
+        tw = min(0.40, max(0.10, 0.20 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(macro_bias * 16 + cot_bias * 10 + blended * 8 - news_penalty * 0.5)
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             42 + abs(macro_bias) * 22 + abs(cot_bias) * 14 + abs(tech_score) * 8 - news_penalty * 0.4
-        ))))
+        )))))
         bias = bias_from_trend(blended, score_adjust)
         tradeable = bias != "NEUTRAL" and confidence >= 50
         summary = "session_swing"
 
     elif horizon == "1d":
-        blended = trend_bias * 0.95 + tech_score * 0.05
+        tw = min(0.15, max(0.0, 0.05 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         regime_bias = macro_bias * 0.60 + cot_bias * 0.30 + sentiment_bias * 0.10
         score_adjust = round(regime_bias * 20 + blended * 6 - news_penalty * 0.2)
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             48 + abs(macro_bias) * 24 + abs(cot_bias) * 18 + abs(trend_bias) * 10
-        ))))
+        )))))
         bias = bias_from_trend(regime_bias, score_adjust)
         tradeable = bias != "NEUTRAL" and confidence >= 55
         summary = "macro_regime"
 
     else:  # 1h (default)
-        blended = trend_bias * 0.65 + tech_score * 0.35
+        tw = min(0.55, max(0.20, 0.35 + hurst_adj))
+        blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(macro_bias * 14 + cot_bias * 8 + blended * 10 - news_penalty * 0.8)
         if session.is_overlap:
             score_adjust += 2
-        confidence = max(0, min(100, int(round(
+        confidence = _vol_adj(max(0, min(100, int(round(
             confidence_from_components(trend_bias, macro_bias, cot_bias, sentiment_bias, news_penalty)
             + abs(tech_score) * 10
-        ))))
+        )))))
         bias = bias_from_trend(blended, score_adjust)
         tradeable = (not block_trading) and bias != "NEUTRAL" and confidence >= 55
         summary = "rates_repricing"
@@ -419,6 +444,8 @@ def build_raw_context_from_inputs(
         risk_level=risk_level,
         block_trading=block_trading,
         session=session,
+        hurst=tech["hurst"],
+        vol_regime=tech["vol_regime"],
     )
     tf_5m  = timeframe_signal("5m",  **_tf_kwargs, tech_score=tech["tech_5m"])
     tf_15m = timeframe_signal("15m", **_tf_kwargs, tech_score=tech["tech_15m"])

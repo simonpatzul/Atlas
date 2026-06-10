@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 import sqlite3
 import tempfile
 import time
 from pathlib import Path
+
+logger = logging.getLogger("atlas-cache")
 
 # Default to /tmp so Vercel Lambda (read-only filesystem except /tmp) works without config.
 # CACHE_DB env var overrides for local dev or custom deployments.
@@ -26,7 +29,8 @@ def get(key: str):
         if not row or row[1] < time.time():
             return None
         return json.loads(row[0])
-    except Exception:
+    except Exception as exc:
+        logger.debug("cache.get failed key=%s: %s", key, exc)
         return None
 
 
@@ -37,7 +41,8 @@ def get_stale(key: str):
         if not row:
             return None
         return json.loads(row[0])
-    except Exception:
+    except Exception as exc:
+        logger.debug("cache.get_stale failed key=%s: %s", key, exc)
         return None
 
 
@@ -48,5 +53,5 @@ def put(key: str, value, ttl_sec: int):
                 "INSERT OR REPLACE INTO cache VALUES (?,?,?)",
                 (key, json.dumps(value), time.time() + ttl_sec),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("cache.put failed key=%s: %s", key, exc)
