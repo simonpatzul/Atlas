@@ -1,3 +1,4 @@
+# v0.3.0 — 6-TF predictions, adaptive learner, regime-conditional blending
 import sys
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from main import app as atlas_app  # noqa: E402
 async def app(scope, receive, send):
     if scope["type"] == "http":
         path = scope.get("path", "/")
-        # Strip /api prefix when present so FastAPI receives /context/..., /market/..., etc.
+        # Strip /api prefix so FastAPI receives /context/..., /market/..., etc.
         if path.startswith("/api"):
             stripped = path[4:] or "/"
             scope = {**scope, "path": stripped, "raw_path": stripped.encode()}
