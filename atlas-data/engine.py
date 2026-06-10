@@ -17,6 +17,7 @@ from models import (
     SessionContext,
     TimeframeSignal,
 )
+from learner import evaluate_with_candles, get_weight, record_prediction
 from scoring import news_risk_level
 
 logger = logging.getLogger("atlas-data")
@@ -245,7 +246,7 @@ def timeframe_signal(
         return conf
 
     if horizon == "5m":
-        tw = min(0.90, max(0.50, 0.70 + hurst_adj))
+        tw = min(0.90, max(0.50, get_weight("w_tech_5m") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 8 + sentiment_bias * 3 - news_penalty * 1.3)
         if session.is_overlap:
@@ -260,7 +261,7 @@ def timeframe_signal(
         summary = "microstructure_momentum"
 
     elif horizon == "15m":
-        tw = min(0.80, max(0.40, 0.60 + hurst_adj))
+        tw = min(0.80, max(0.40, get_weight("w_tech_15m") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 9 + sentiment_bias * 4 - news_penalty * 1.1)
         if session.is_overlap:
@@ -273,7 +274,7 @@ def timeframe_signal(
         summary = "short_momentum"
 
     elif horizon == "30m":
-        tw = min(0.70, max(0.30, 0.50 + hurst_adj))
+        tw = min(0.70, max(0.30, get_weight("w_tech_30m") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(blended * 10 + macro_bias * 5 + cot_bias * 3 - news_penalty * 0.9)
         if session.is_overlap:
@@ -286,7 +287,7 @@ def timeframe_signal(
         summary = "intraday_flow"
 
     elif horizon == "4h":
-        tw = min(0.40, max(0.10, 0.20 + hurst_adj))
+        tw = min(0.40, max(0.10, get_weight("w_tech_4h") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(macro_bias * 16 + cot_bias * 10 + blended * 8 - news_penalty * 0.5)
         confidence = _vol_adj(max(0, min(100, int(round(
@@ -297,7 +298,7 @@ def timeframe_signal(
         summary = "session_swing"
 
     elif horizon == "1d":
-        tw = min(0.15, max(0.0, 0.05 + hurst_adj))
+        tw = min(0.15, max(0.0, get_weight("w_tech_1d") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         regime_bias = macro_bias * 0.60 + cot_bias * 0.30 + sentiment_bias * 0.10
         score_adjust = round(regime_bias * 20 + blended * 6 - news_penalty * 0.2)
@@ -309,7 +310,7 @@ def timeframe_signal(
         summary = "macro_regime"
 
     else:  # 1h (default)
-        tw = min(0.55, max(0.20, 0.35 + hurst_adj))
+        tw = min(0.55, max(0.20, get_weight("w_tech_1h") + hurst_adj))
         blended = trend_bias * (1 - tw) + tech_score * tw
         score_adjust = round(macro_bias * 14 + cot_bias * 8 + blended * 10 - news_penalty * 0.8)
         if session.is_overlap:
@@ -560,7 +561,33 @@ async def build_raw_context(sym: str, pair: str) -> dict:
         collect_sentiment_input(pair),
         _safe_collect("market", "Yahoo Finance", market.fetch_market(sym, pair)),
     )
-    return build_raw_context_from_inputs(sym, pair, shared_inputs, sent, sent_status, mkt)
+
+    # Evaluate past predictions before building new context (uses candle history)
+    if mkt:
+        candles = mkt.get("candles") or []
+        pip = market._pip_size(sym)
+        evaluate_with_candles(sym, candles, pip)
+
+    raw = build_raw_context_from_inputs(sym, pair, shared_inputs, sent, sent_status, mkt)
+
+    # Record new predictions for evaluation in future requests
+    price = (mkt or {}).get("price", 0.0)
+    adv = raw.get("advanced_models")
+    macro_b = raw["macro"]["bias"]
+    if price > 0 and adv:
+        for horizon, tf_key, tech_attr in [
+            ("5m",  "timeframe_5m",  "tech_score_5m"),
+            ("1h",  "timeframe_1h",  "tech_score_1h"),
+            ("4h",  "timeframe_4h",  "tech_score_4h"),
+            ("1d",  "timeframe_1d",  "tech_score_4h"),  # use 4h tech as 1d proxy
+        ]:
+            tf = raw[tf_key]
+            record_prediction(
+                sym, horizon, tf.bias, tf.confidence, price,
+                getattr(adv, tech_attr, 0.0), macro_b,
+            )
+
+    return raw
 
 
 async def build_debug_context(sym: str, pair: str) -> DebugContextResponse:

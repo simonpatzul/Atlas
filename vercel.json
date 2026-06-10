@@ -6,6 +6,7 @@
   ],
   "routes": [
     { "src": "/api(.*)", "dest": "/api/index.py" },
+    { "src": "/learning(.*)", "dest": "/api/index.py" },
     { "src": "/health", "dest": "/api/index.py" },
     { "src": "/context(.*)", "dest": "/api/index.py" },
     { "src": "/market(.*)", "dest": "/api/index.py" },

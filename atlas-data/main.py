@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from collectors import market
 from config import ALLOWED_HOSTS, CORS_ORIGINS, MT4_ALLOWED_API_KEYS
+from learner import get_stats as learner_stats
 from engine import (
     _mt4_from_raw,
     build_debug_context,
@@ -155,6 +156,12 @@ async def health():
         "auth_enabled": bool(MT4_ALLOWED_API_KEYS),
         "pairs": sorted(PAIRS.keys()),
     }
+
+
+@app.get("/learning/stats")
+async def learning_stats():
+    """Devuelve pesos aprendidos y estadísticas de precisión del modelo adaptivo."""
+    return learner_stats()
 
 
 @app.get("/context/{symbol}", response_model=DebugContextResponse)
