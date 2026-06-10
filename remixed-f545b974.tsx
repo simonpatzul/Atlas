@@ -798,8 +798,12 @@ function SidebarPanel(props) {
     onChangePredictionHorizon,
   } = props;
   const tf5m = context?.timeframe_5m;
+  const tf15m = context?.timeframe_15m;
+  const tf30m = context?.timeframe_30m;
   const tf1h = context?.timeframe_1h;
+  const tf4h = context?.timeframe_4h;
   const tf1d = context?.timeframe_1d;
+  const adv = context?.advanced_models;
   const session = context?.session;
   const eventBlock = context?.event_block;
 
@@ -861,9 +865,23 @@ function SidebarPanel(props) {
       <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px", marginTop: "6px" }}>HORIZONTES API</div>
       <MetricsCard
         rows={[
-          { l: "5m", v: tf5m ? `${biasLabel(tf5m.bias)} · ${tf5m.confidence}%` : "-", c: biasCol(biasLabel(tf5m?.bias)) },
-          { l: "1H", v: tf1h ? `${biasLabel(tf1h.bias)} · ${tf1h.confidence}%` : "-", c: biasCol(biasLabel(tf1h?.bias)) },
-          { l: "1D", v: tf1d ? `${biasLabel(tf1d.bias)} · ${tf1d.confidence}%` : "-", c: biasCol(biasLabel(tf1d?.bias)) },
+          { l: "5m",  v: tf5m  ? `${biasLabel(tf5m.bias)} · ${tf5m.confidence}%`  : "-", c: biasCol(biasLabel(tf5m?.bias)) },
+          { l: "15m", v: tf15m ? `${biasLabel(tf15m.bias)} · ${tf15m.confidence}%` : "-", c: biasCol(biasLabel(tf15m?.bias)) },
+          { l: "30m", v: tf30m ? `${biasLabel(tf30m.bias)} · ${tf30m.confidence}%` : "-", c: biasCol(biasLabel(tf30m?.bias)) },
+          { l: "1H",  v: tf1h  ? `${biasLabel(tf1h.bias)} · ${tf1h.confidence}%`  : "-", c: biasCol(biasLabel(tf1h?.bias)) },
+          { l: "4H",  v: tf4h  ? `${biasLabel(tf4h.bias)} · ${tf4h.confidence}%`  : "-", c: biasCol(biasLabel(tf4h?.bias)) },
+          { l: "1D",  v: tf1d  ? `${biasLabel(tf1d.bias)} · ${tf1d.confidence}%`  : "-", c: biasCol(biasLabel(tf1d?.bias)) },
+        ]}
+      />
+
+      <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px", marginTop: "6px" }}>MODELOS AVANZADOS</div>
+      <MetricsCard
+        rows={[
+          { l: "Hurst", v: adv ? adv.hurst_exponent.toFixed(3) : "-", c: adv ? (adv.hurst_exponent > 0.6 ? "#00e87a" : adv.hurst_exponent < 0.4 ? "#ff9900" : "#8899aa") : "#8899aa" },
+          { l: "Régimen", v: adv?.hurst_regime ?? "-", c: adv?.hurst_regime === "trending" ? "#00e87a" : adv?.hurst_regime === "mean_reverting" ? "#ff9900" : "#8899aa" },
+          { l: "Vol Régimen", v: adv?.vol_regime ?? "-", c: adv?.vol_regime === "HIGH" ? "#ff4060" : adv?.vol_regime === "LOW" ? "#ffaa00" : "#00e87a" },
+          { l: "LinReg Slope", v: adv ? `${adv.linreg_slope_pct.toFixed(4)}%` : "-", c: adv ? (adv.linreg_slope_pct > 0 ? "#00e87a" : "#ff4060") : "#8899aa" },
+          { l: "LinReg R²", v: adv ? adv.linreg_r2.toFixed(3) : "-", c: adv ? (adv.linreg_r2 > 0.7 ? "#00e87a" : adv.linreg_r2 > 0.4 ? "#ffaa00" : "#8899aa") : "#8899aa" },
         ]}
       />
 

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file gives Claude Code context for working on ATLAS.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Current State
 
@@ -10,7 +10,7 @@ Active surfaces:
 
 - Frontend: root Vite/React app in `remixed-f545b974.tsx`, mounted by `main.jsx`.
 - Backend: FastAPI service in `atlas-data/`.
-- MT4 EA: `atlas-data/examples/Atlas.mq4`.
+- MT4 EAs: `atlas-data/examples/` (Atlas.mq4, AtlasBacktest.mq4, RutaV5AtlasAdaptiveLearner.mq4).
 - Vercel deployment adapter: `api/index.py`, `vercel.json`, root `requirements.txt`.
 
 GitHub repo:
@@ -43,10 +43,12 @@ Vercel deployment is live at `https://atlas-delta-nine.vercel.app`. Frontend, ba
 
 Main files:
 
-- `atlas-data/main.py`
-- `atlas-data/engine.py`
-- `atlas-data/models.py`
-- `atlas-data/cache.py`
+- `atlas-data/main.py` — FastAPI app, endpoints, middleware (CORS, rate limit, security headers, trusted hosts)
+- `atlas-data/engine.py` — context computation: `collect_shared_inputs()`, `timeframe_signal()`, `build_mt4_context()`
+- `atlas-data/models.py` — Pydantic response models (Mt4ContextResponse, AdvancedModels, TimeframeSignal, etc.)
+- `atlas-data/scoring.py` — `news_risk_level()`: classifies nearest event in 60m window as LOW/MEDIUM/HIGH
+- `atlas-data/cache.py` — SQLite wrapper
+- `atlas-data/config.py` — shared constants and settings
 - `atlas-data/collectors/*.py`
 
 Important endpoints:
@@ -93,7 +95,9 @@ Required/optional keys:
 
 - `FRED_API_KEY`: optional but recommended for macro bias.
 - `ALPHA_API_KEY`: optional; free tier is low-limit and may rate limit.
-- `MT4_API_KEY`: optional security for MT4 endpoints.
+- `MT4_API_KEY`: optional single-key auth for MT4 endpoints.
+- `MT4_API_KEYS`: optional comma-separated list of valid keys (multi-client support).
+- `ALLOWED_HOSTS`: comma-separated trusted hosts for `TrustedHostMiddleware` (default: `localhost,127.0.0.1`).
 
 Environment variables:
 
@@ -101,8 +105,10 @@ Environment variables:
 FRED_API_KEY=
 ALPHA_API_KEY=
 MT4_API_KEY=
+MT4_API_KEYS=
 CACHE_DB=/tmp/atlas-cache.db
 CORS_ORIGINS=*
+ALLOWED_HOSTS=localhost,127.0.0.1
 BLOCK_HIGH_IMPACT_MINUTES=30
 BLOCK_MEDIUM_IMPACT_MINUTES=15
 COT_BIAS_DIVISOR=150000
@@ -114,21 +120,40 @@ Important robustness notes:
 - `market.py` now falls back to stale cache and then to a synthetic snapshot if Yahoo fails. This prevents frontend total failure from `/market/{symbol}`.
 - Context collectors are wrapped with `_safe_collect` in `engine.py`; provider failures should degrade context, not crash the endpoint.
 - Alpha Vantage rate limits should appear as provider failure, not app failure.
+- `main.py` applies `SecurityHeadersMiddleware` (HSTS, X-Frame-Options, X-Content-Type-Options) and `RateLimitMiddleware` (60 req/min on `/` and `/mt4/*`). Both are in `main.py` as custom Starlette middleware classes.
 
-## MT4 EA
+## MT4 EAs
 
-Main file:
+### Atlas.mq4 (main EA)
 
-```text
-atlas-data/examples/Atlas.mq4
-```
+File: `atlas-data/examples/Atlas.mq4`
 
-Current strategy:
+Strategy:
 
 - Opens only when `bias_5m == bias_1h == bias_1d` and bias is `UP` or `DOWN`.
 - Does not open on `NEUTRAL` or API/news block.
 - Can close on API disagreement.
 - Has emergency stop, trailing stop, and chart status panel.
+- `AlignedCount()` requires ≥4/6 TFs aligned with `bias_1h` direction (6-way alignment).
+
+### AtlasBacktest.mq4
+
+File: `atlas-data/examples/AtlasBacktest.mq4`
+
+Strategy Tester companion to Atlas.mq4. Simulates API context in backtests (no live WebRequest). Use in MetaTrader Strategy Tester to validate Atlas.mq4 logic historically.
+
+### RutaV5AtlasAdaptiveLearner.mq4
+
+File: `atlas-data/examples/RutaV5AtlasAdaptiveLearner.mq4`
+
+RUTA v5 M1 Adaptive Learner — EURUSD mean reversion on M5 with M30 state filtering and M1 microstructure machine learning. Integrates the ATLAS API for macro confirmation.
+
+Key design:
+- **Entry**: Z-score mean reversion on M5 (default lookback=23, threshold=1.9), filtered by M30 state.
+- **M1 Learner**: Adaptive Z-lookback (18), EMA fast/slow (4/11), entry score min (0.20). Activates after min 6 trades.
+- **SL/TP**: ATR-based (initial 1.35×ATR, range 0.85–2.10), with swing lookback and emergency SL (2.80×ATR).
+- **Session filter**: 6:00–22:00 UTC (London/NY overlap).
+- **Risk**: configurable as % of balance (default 0.50%) or fixed lots.
 
 Important inputs:
 
@@ -184,9 +209,11 @@ Environment variables:
 VITE_ATLAS_API_BASE=/api
 CORS_ORIGINS=*
 CACHE_DB=/tmp/atlas-cache.db
+ALLOWED_HOSTS=atlas-delta-nine.vercel.app
 FRED_API_KEY=optional
 ALPHA_API_KEY=optional
 MT4_API_KEY=optional
+MT4_API_KEYS=optional
 ```
 
 Files used by Vercel:
@@ -286,4 +313,5 @@ These are load-bearing constraints — don't change without flagging:
 - **Linear Regression**: `market.py:linreg_slope_r2()` returns normalized slope and R² over 20 bars. Measures trend quality and direction.
 - **Volatility Regime**: `market.py:vol_regime_from_candles()` classifies current ATR vs p25/p75 as LOW/NORMAL/HIGH.
 - **Tech Score per TF**: `market.py:tech_score_from_candles()` returns -1..+1 from EMA9/21/50 stack (45%), RSI (30%), price-vs-MA50 (25%). Computed for 5M, 15M, 30M, 1H, 4H.
+- **Per-TF tradeable confidence thresholds**: 5M≥35%, 15M≥38%, 30M≥42%, 1H≥55%, 4H≥50%, 1D≥55%. These differ by TF and must stay consistent between `engine.py:timeframe_signal()` and any frontend display logic.
 - **6-way alignment in MT4 EA**: `AlignedCount()` counts how many of 6 TFs agree with bias_1h direction. Requires ≥4/6 aligned (was 3-way). Status panel shows Hurst and vol regime.

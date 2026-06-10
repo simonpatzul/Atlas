@@ -94,6 +94,8 @@ Gestion de riesgo del EA:
 ## Seguridad
 
 Si defines `MT4_API_KEY` en `.env`, envia el header `X-API-Key` desde el cliente.
+Si estas rotando llaves, puedes aceptar varias temporalmente con `MT4_API_KEYS=llave_anterior,otra_llave_temporal`.
+No uses una llave vacia en Vercel/produccion.
 
 ## Configuracion WebRequest en MT4
 
