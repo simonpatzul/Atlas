@@ -267,7 +267,7 @@ function EmptyState({ text }) {
   );
 }
 
-function Chart({ pair, candles, mlPred, ema9, ema21, ema50, bb, srZones, fibs, showEMA, showBB, showFib, showSR }) {
+function Chart({ pair, candles, mlPred, predActive, ema9, ema21, ema50, bb, srZones, fibs, showEMA, showBB, showFib, showSR }) {
   if (!candles.length) return <EmptyState text="Cargando velas reales..." />;
 
   const width = 820;
@@ -275,7 +275,9 @@ function Chart({ pair, candles, mlPred, ema9, ema21, ema50, bb, srZones, fibs, s
   const pad = { top: 28, right: 80, bottom: 28, left: 72 };
   const chartW = width - pad.left - pad.right;
   const chartH = height - pad.top - pad.bottom;
-  const totalBars = candles.length;
+
+  const futureBars = predActive && mlPred?.dir !== 0 ? 18 : 0;
+  const totalBars = candles.length + futureBars;
   const barWidth = chartW / totalBars;
 
   const mlLevels = mlPred?.dir !== 0 ? [mlPred.tp2, mlPred.tp, mlPred.sl] : [];
@@ -308,6 +310,11 @@ function Chart({ pair, candles, mlPred, ema9, ema21, ema50, bb, srZones, fibs, s
       .join(" ");
     return path ? <path key={color} d={path} fill="none" stroke={color} strokeWidth="1.2" strokeDasharray={dash} opacity="0.85" /> : null;
   };
+
+  const lastCandleIdx = candles.length - 1;
+  const lastX = toX(lastCandleIdx);
+  const rightEdgeX = pad.left + chartW;
+  const originY = toY(currentPrice);
 
   return (
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", background: "#040d18", borderRadius: "6px", border: "1px solid #0c1e32" }}>
@@ -372,7 +379,36 @@ function Chart({ pair, candles, mlPred, ema9, ema21, ema50, bb, srZones, fibs, s
         </>
       )}
 
-      {mlPred?.dir !== 0 && mlPred && (
+      {predActive && mlPred?.dir !== 0 && mlPred && (
+        <>
+          {/* Separator at last candle */}
+          <line x1={lastX} y1={pad.top} x2={lastX} y2={pad.top + chartH} stroke="#1a3a54" strokeWidth="1" strokeDasharray="4,3" opacity="0.7" />
+          <text x={lastX + 3} y={pad.top + 11} fill="#1a4060" fontSize="7" fontFamily="monospace">TENDENCIA ML →</text>
+
+          {/* Directional cone: triangle from current price → TP2 (upper) and SL (lower) */}
+          <polygon
+            points={`${lastX},${originY} ${rightEdgeX},${toY(mlPred.tp2)} ${rightEdgeX},${toY(mlPred.sl)}`}
+            fill={mlPred.dir === 1 ? "rgba(0,232,122,0.08)" : "rgba(255,64,96,0.08)"}
+            stroke="none"
+          />
+          {/* Upper cone edge (TP2) */}
+          <line x1={lastX} y1={originY} x2={rightEdgeX} y2={toY(mlPred.tp2)}
+            stroke={mlPred.dir === 1 ? "#00ff88" : "#ff6080"} strokeWidth="1" strokeDasharray="4,3" opacity="0.6" />
+          {/* Lower cone edge (SL) */}
+          <line x1={lastX} y1={originY} x2={rightEdgeX} y2={toY(mlPred.sl)}
+            stroke={mlPred.dir === 1 ? "#ff4060" : "#ff4060"} strokeWidth="1" strokeDasharray="4,3" opacity="0.6" />
+          {/* Center tendency line to TP1 */}
+          <line x1={lastX} y1={originY} x2={rightEdgeX} y2={toY(mlPred.tp)}
+            stroke={mlPred.dir === 1 ? "#00e87a" : "#ff4060"} strokeWidth="1.8" strokeDasharray="6,3" opacity="0.9" />
+
+          {/* Level labels at right edge */}
+          <text x={rightEdgeX - 2} y={toY(mlPred.tp2) - 3} textAnchor="end" fill="#00ff88" fontSize="7" fontFamily="monospace">TP2 {fmt(pair, mlPred.tp2)}</text>
+          <text x={rightEdgeX - 2} y={toY(mlPred.tp) - 3} textAnchor="end" fill="#00e87a" fontSize="8" fontFamily="monospace">TP {fmt(pair, mlPred.tp)}</text>
+          <text x={rightEdgeX - 2} y={toY(mlPred.sl) + 10} textAnchor="end" fill="#ff4060" fontSize="8" fontFamily="monospace">SL {fmt(pair, mlPred.sl)}</text>
+        </>
+      )}
+
+      {!predActive && mlPred?.dir !== 0 && mlPred && (
         <>
           <line x1={pad.left} y1={toY(mlPred.tp2)} x2={pad.left + chartW} y2={toY(mlPred.tp2)} stroke="#00ff88" strokeWidth="0.8" strokeDasharray="3,3" opacity="0.5" />
           <line x1={pad.left} y1={toY(mlPred.tp)}  x2={pad.left + chartW} y2={toY(mlPred.tp)}  stroke="#00e87a" strokeWidth="1.3" strokeDasharray="5,3" opacity="0.85" />
@@ -568,7 +604,10 @@ function MetricsCard({ rows }) {
   );
 }
 
-function MLPredictionPanel({ pair, mlPred, predictionHorizon, onChangePredictionHorizon, training, onTrain }) {
+function MLPredictionPanel({ pair, mlPred, predictionHorizon, onChangePredictionHorizon, predActive, onTogglePred, training, onTrain }) {
+  const canPredict = mlPred?.dir !== 0;
+  const predColor = predActive ? "#ff4060" : "#00d4ff";
+
   return (
     <>
       <div style={{ display: "flex", gap: "5px", marginBottom: "8px" }}>
@@ -613,9 +652,17 @@ function MLPredictionPanel({ pair, mlPred, predictionHorizon, onChangePrediction
       )}
 
       <button
+        onClick={onTogglePred}
+        disabled={!canPredict}
+        style={{ width: "100%", marginTop: "8px", background: predActive ? "rgba(255,64,96,0.1)" : canPredict ? "rgba(0,212,255,0.07)" : "#0a1828", border: `1px solid ${predActive ? "#ff406066" : canPredict ? "#00d4ff44" : "#1a4060"}`, borderRadius: "3px", color: predActive ? "#ff4060" : canPredict ? predColor : "#1a4060", fontSize: "9px", letterSpacing: "1px", padding: "7px", cursor: canPredict ? "pointer" : "not-allowed", fontWeight: 600 }}
+      >
+        {predActive ? "✕ CERRAR PROYECCIÓN" : "⚡ PREDECIR"}
+      </button>
+
+      <button
         onClick={onTrain}
         disabled={training}
-        style={{ width: "100%", marginTop: "8px", background: training ? "#0a1828" : "#071420", border: `1px solid ${training ? "#1a4060" : "#00d4ff44"}`, borderRadius: "3px", color: training ? "#1a4060" : "#00d4ff", fontSize: "9px", letterSpacing: "1px", padding: "6px", cursor: training ? "not-allowed" : "pointer" }}
+        style={{ width: "100%", marginTop: "6px", background: training ? "#0a1828" : "#071420", border: `1px solid ${training ? "#1a4060" : "#00d4ff22"}`, borderRadius: "3px", color: training ? "#1a4060" : "#1a6080", fontSize: "8px", letterSpacing: "1px", padding: "5px", cursor: training ? "not-allowed" : "pointer" }}
       >
         {training ? "⟳ ENTRENANDO..." : "⚙ ENTRENAR CON HISTÓRICO"}
       </button>
@@ -751,6 +798,8 @@ function SidebarPanel(props) {
     onChangePredictionHorizon,
     mlStats,
     mlPred,
+    predActive,
+    onTogglePred,
     training,
     onTrain,
   } = props;
@@ -775,7 +824,7 @@ function SidebarPanel(props) {
         <div style={{ fontSize: "8px", color: "#1a4060", marginTop: "3px" }}>Técnico real + contexto real API</div>
       </div>
 
-      <MLPredictionPanel pair={pair} mlPred={mlPred} predictionHorizon={predictionHorizon} onChangePredictionHorizon={onChangePredictionHorizon} training={training} onTrain={onTrain} />
+      <MLPredictionPanel pair={pair} mlPred={mlPred} predictionHorizon={predictionHorizon} onChangePredictionHorizon={onChangePredictionHorizon} predActive={predActive} onTogglePred={onTogglePred} training={training} onTrain={onTrain} />
 
       <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px", marginTop: "6px" }}>MERCADO REAL</div>
       <MetricsCard
@@ -873,6 +922,7 @@ export default function AtlasChart() {
   const [showFib, setShowFib] = useState(false);
   const [showSR, setShowSR] = useState(true);
   const [predictionHorizon, setPredictionHorizon] = useState("1h");
+  const [predActive, setPredActive] = useState(false);
   const [mlStats, setMlStats] = useState(null);
   const [training, setTraining] = useState(false);
 
@@ -987,6 +1037,7 @@ export default function AtlasChart() {
     setContext(null);
     setError("");
     setLoading(true);
+    setPredActive(false);
   };
 
   const providers = context?.providers || {};
@@ -1070,7 +1121,7 @@ export default function AtlasChart() {
                 <div style={{ fontFamily: "'Orbitron',monospace", fontSize: "10px", color: "#00d4ff", letterSpacing: "2px" }}>CARGANDO DATOS REALES</div>
               </div>
             )}
-            <Chart pair={pair} candles={candles} mlPred={mlPred} ema9={ema9} ema21={ema21} ema50={ema50} bb={bb} srZones={srZones} fibs={fibs} showEMA={showEMA} showBB={showBB} showFib={showFib} showSR={showSR} />
+            <Chart pair={pair} candles={candles} mlPred={mlPred} predActive={predActive} ema9={ema9} ema21={ema21} ema50={ema50} bb={bb} srZones={srZones} fibs={fibs} showEMA={showEMA} showBB={showBB} showFib={showFib} showSR={showSR} />
           </div>
 
           <RSIChart rsiVals={rsiVals} />
@@ -1100,6 +1151,8 @@ export default function AtlasChart() {
           onChangePredictionHorizon={changePredictionHorizon}
           mlStats={mlStats}
           mlPred={mlPred}
+          predActive={predActive}
+          onTogglePred={() => setPredActive((p) => !p)}
           training={training}
           onTrain={train}
         />
