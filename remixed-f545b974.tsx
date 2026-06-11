@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "AUD/USD", "USD/CAD", "USD/CHF"];
 const PREDICTION_HORIZONS = {
-  "5m": { label: "5M", chartLabel: "5M", countdownSec: 300, steps: 1, dt: 1 / 288, rangeMultiplier: 0.2 },
+  "5m": { label: "5M", chartLabel: "5M", countdownSec: 300, steps: 12, dt: 1 / 12, rangeMultiplier: 0.2 },
   "1h": { label: "1H", chartLabel: "1H", countdownSec: 3600, steps: 12, dt: 1 / 24, rangeMultiplier: 1 },
   "1d": { label: "1D", chartLabel: "1D", countdownSec: 86400, steps: 24, dt: 1 / 24, rangeMultiplier: 6 },
 };
@@ -772,6 +772,113 @@ function PredictionPanel({ mc, pair, combinedBias, running, context, candles, on
   );
 }
 
+function MLLearnerPanel({ mlStats }) {
+  if (!mlStats) return null;
+  const { weights, defaults, total_evaluated, correct, wrong, accuracy_pct, pending_evaluation, by_horizon } = mlStats;
+
+  const horizonRows = [
+    { key: "5m", label: "5M", wKey: "w_tech_5m" },
+    { key: "1h", label: "1H", wKey: "w_tech_1h" },
+    { key: "4h", label: "4H", wKey: "w_tech_4h" },
+    { key: "1d", label: "1D", wKey: "w_tech_1d" },
+  ];
+
+  const accuracyColor = (pct) =>
+    pct == null ? "#8899aa" : pct >= 65 ? "#00e87a" : pct >= 50 ? "#ffaa00" : "#ff4060";
+
+  return (
+    <div style={{ marginBottom: "8px" }}>
+      <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px", marginTop: "6px" }}>
+        MODELO ADAPTIVO ML
+      </div>
+
+      <div className="card" style={{ marginBottom: "5px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "5px" }}>
+          <span style={{ fontSize: "8px", color: "#1a4060", letterSpacing: "1px" }}>PRECISIÓN GLOBAL</span>
+          <span style={{ fontFamily: "'Orbitron',monospace", fontSize: "15px", fontWeight: 900, color: accuracyColor(accuracy_pct) }}>
+            {accuracy_pct != null ? `${accuracy_pct}%` : "—"}
+          </span>
+        </div>
+        {accuracy_pct != null && (
+          <div style={{ height: "4px", background: "#0a1828", borderRadius: "2px", marginBottom: "5px" }}>
+            <div style={{ height: "100%", width: `${accuracy_pct}%`, background: accuracyColor(accuracy_pct), borderRadius: "2px", transition: "width 0.5s" }} />
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: "9px", color: "#00e87a" }}>{correct}✓</span>
+          <span style={{ fontSize: "9px", color: "#8899aa" }}>{total_evaluated} evaluadas</span>
+          <span style={{ fontSize: "9px", color: "#ff4060" }}>{wrong}✗</span>
+        </div>
+        {pending_evaluation > 0 && (
+          <div style={{ fontSize: "8px", color: "#005533", textAlign: "center", marginTop: "3px" }}>
+            {pending_evaluation} pendientes de evaluar
+          </div>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: "5px" }}>
+        <div style={{ fontSize: "7px", color: "#1a4060", letterSpacing: "1px", marginBottom: "4px" }}>POR HORIZONTE</div>
+        {horizonRows.map(({ key, label, wKey }) => {
+          const h = by_horizon?.[key];
+          const pct = h?.accuracy_pct ?? null;
+          const w = weights?.[wKey];
+          const def = defaults?.[wKey];
+          const drift = w && def ? Math.round((w.value - def) * 100) : 0;
+          return (
+            <div key={key} style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "3px" }}>
+              <span style={{ width: "18px", fontSize: "9px", color: "#4a6080", flexShrink: 0 }}>{label}</span>
+              <div style={{ flex: 1, height: "3px", background: "#0a1828", borderRadius: "2px" }}>
+                {pct != null && (
+                  <div style={{ height: "100%", width: `${pct}%`, background: accuracyColor(pct), borderRadius: "2px", transition: "width 0.5s" }} />
+                )}
+              </div>
+              <span style={{ width: "30px", fontSize: "9px", color: accuracyColor(pct), textAlign: "right", flexShrink: 0 }}>
+                {pct != null ? `${pct}%` : "—"}
+              </span>
+              {h && (
+                <span style={{ fontSize: "8px", color: "#1a4060", width: "28px", textAlign: "right", flexShrink: 0 }}>
+                  {h.correct}✓{h.wrong}✗
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card">
+        <div style={{ fontSize: "7px", color: "#1a4060", letterSpacing: "1px", marginBottom: "4px" }}>PESOS APRENDIDOS (TÉC vs FUND)</div>
+        {horizonRows.map(({ key, label, wKey }) => {
+          const w = weights?.[wKey];
+          const def = defaults?.[wKey];
+          if (!w || def == null) return null;
+          const pct = Math.round(w.value * 100);
+          const defPct = Math.round(def * 100);
+          const drift = pct - defPct;
+          const driftColor = drift > 2 ? "#00e87a" : drift < -2 ? "#ff9900" : "#4a6080";
+          return (
+            <div key={key} style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "3px" }}>
+              <span style={{ width: "18px", fontSize: "9px", color: "#4a6080", flexShrink: 0 }}>{label}</span>
+              <div style={{ flex: 1, height: "3px", background: "#0a1828", borderRadius: "2px", position: "relative" }}>
+                <div style={{ height: "100%", width: `${pct}%`, background: "#00d4ff44", borderRadius: "2px" }} />
+                <div style={{ position: "absolute", top: 0, left: `${defPct}%`, width: "1px", height: "100%", background: "#1a4060" }} />
+              </div>
+              <span style={{ width: "26px", fontSize: "9px", color: "#00d4ff", textAlign: "right", flexShrink: 0 }}>{pct}%</span>
+              <span style={{ width: "26px", fontSize: "8px", color: driftColor, textAlign: "right", flexShrink: 0 }}>
+                {drift > 0 ? `+${drift}` : drift < 0 ? `${drift}` : "—"}
+              </span>
+            </div>
+          );
+        })}
+        {weights?.w_tech_5m?.n_updates > 0 && (
+          <div style={{ fontSize: "8px", color: "#1a4060", marginTop: "4px", textAlign: "center" }}>
+            {Object.values(weights).reduce((s, w) => s + (w.n_updates || 0), 0)} actualizaciones de peso
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SidebarPanel(props) {
   const {
     combinedBias,
@@ -796,6 +903,7 @@ function SidebarPanel(props) {
     predTime,
     predictionHorizon,
     onChangePredictionHorizon,
+    mlStats,
   } = props;
   const tf5m = context?.timeframe_5m;
   const tf15m = context?.timeframe_15m;
@@ -911,6 +1019,8 @@ function SidebarPanel(props) {
         ))}
       </div>
 
+      <MLLearnerPanel mlStats={mlStats} />
+
       {predTime && (
         <div style={{ fontSize: "8px", color: "#1a3050", marginTop: "6px", textAlign: "center", lineHeight: "1.6" }}>
           Generada: {predTime.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -935,7 +1045,20 @@ export default function AtlasChart() {
   const [showFib, setShowFib] = useState(false);
   const [showSR, setShowSR] = useState(true);
   const [predictionHorizon, setPredictionHorizon] = useState("1h");
+  const [mlStats, setMlStats] = useState(null);
   const timerRef = useRef(null);
+
+  useEffect(() => {
+    const fetchMl = async () => {
+      try {
+        const data = await fetchJson("/learning/stats");
+        setMlStats(data);
+      } catch {}
+    };
+    fetchMl();
+    const id = setInterval(fetchMl, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const symbol = pair.replace("/", "");
 
@@ -1198,6 +1321,7 @@ export default function AtlasChart() {
           predTime={predTime}
           predictionHorizon={predictionHorizon}
           onChangePredictionHorizon={changePredictionHorizon}
+          mlStats={mlStats}
         />
       </div>
     </div>
