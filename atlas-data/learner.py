@@ -268,6 +268,86 @@ def get_stats() -> dict:
         return {"weights": DEFAULTS, "total_evaluated": 0, "accuracy_pct": None}
 
 
+def train_on_history(symbol: str, candles: list[dict], pip_size: float = 0.0001) -> dict:
+    """
+    Batch-trains on historical candles by sliding a window and evaluating
+    tech signal accuracy vs actual outcomes. Updates weights in bulk.
+    """
+    from collectors.market import tech_score_from_candles  # local import to avoid circular
+
+    if len(candles) < 62:
+        return {"symbol": symbol, "n_candles": len(candles), "skipped": True}
+
+    counts: dict[str, dict] = {h: {"correct": 0, "wrong": 0} for h in HORIZON_MINUTES}
+    min_move = pip_size * MIN_PIPS_MOVE
+
+    for i in range(60, len(candles)):
+        hist = candles[max(0, i - 60): i + 1]
+        try:
+            tech = tech_score_from_candles(hist)
+        except Exception:
+            continue
+        tech_sign = _sign(tech, threshold=0.08)
+        if tech_sign == 0:
+            continue
+        entry = candles[i]["c"]
+        for h_name, h_min in HORIZON_MINUTES.items():
+            bars_ahead = max(1, h_min // 5)
+            if i + bars_ahead >= len(candles):
+                continue
+            actual = candles[i + bars_ahead]["c"]
+            move = actual - entry
+            if abs(move) < min_move:
+                continue
+            if (tech_sign == 1 and move > 0) or (tech_sign == -1 and move < 0):
+                counts[h_name]["correct"] += 1
+            else:
+                counts[h_name]["wrong"] += 1
+
+    # Bulk weight update: aggregate accuracy → new weight
+    for h_name, c in counts.items():
+        total = c["correct"] + c["wrong"]
+        if total < 5:
+            continue
+        accuracy = c["correct"] / total
+        key = f"w_tech_{h_name}"
+        if key not in DEFAULTS:
+            continue
+        lo, hi = BOUNDS[key]
+        default = DEFAULTS[key]
+        delta = (accuracy - 0.5) * 2  # -1..+1
+        if delta > 0:
+            new_val = default + delta * (hi - default)
+        else:
+            new_val = default + delta * (default - lo)
+        new_val = round(max(lo, min(hi, new_val)), 4)
+        try:
+            with _conn() as c_:
+                c_.execute("""
+                    INSERT INTO learner_weights (key, value, n_updates, last_updated)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value        = excluded.value,
+                        n_updates    = n_updates + excluded.n_updates,
+                        last_updated = excluded.last_updated
+                """, (key, new_val, total, time.time()))
+        except Exception as exc:
+            logger.debug("train_on_history %s %s: %s", symbol, key, exc)
+
+    return {
+        "symbol": symbol,
+        "n_candles": len(candles),
+        "by_horizon": {
+            h: {
+                **v,
+                "accuracy_pct": round(v["correct"] / (v["correct"] + v["wrong"]) * 100, 1)
+                if (v["correct"] + v["wrong"]) > 0 else None,
+            }
+            for h, v in counts.items()
+        },
+    }
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────
 
 def _sign(value: float, threshold: float = 0.0) -> int:

@@ -15,7 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from collectors import market
 from config import ALLOWED_HOSTS, CORS_ORIGINS, MT4_ALLOWED_API_KEYS
-from learner import get_stats as learner_stats
+from learner import get_stats as learner_stats, train_on_history
 from engine import (
     _mt4_from_raw,
     build_debug_context,
@@ -162,6 +162,26 @@ async def health():
 async def learning_stats():
     """Devuelve pesos aprendidos y estadísticas de precisión del modelo adaptivo."""
     return learner_stats()
+
+
+@app.post("/learning/train")
+async def learning_train():
+    """Entrena el modelo con datos históricos de los 7 pares."""
+    SYMBOLS = [
+        ("EURUSD", "EUR/USD"), ("GBPUSD", "GBP/USD"), ("USDJPY", "USD/JPY"),
+        ("XAUUSD", "XAU/USD"), ("AUDUSD", "AUD/USD"), ("USDCAD", "USD/CAD"), ("USDCHF", "USD/CHF"),
+    ]
+    results = {}
+    tasks = [market.fetch_market(sym, pair) for sym, pair in SYMBOLS]
+    markets = await asyncio.gather(*tasks, return_exceptions=True)
+    for (sym, _), mkt in zip(SYMBOLS, markets):
+        if isinstance(mkt, Exception):
+            results[sym] = {"error": str(mkt)}
+            continue
+        candles = mkt.get("candles") or []
+        pip = market._pip_size(sym)
+        results[sym] = train_on_history(sym, candles, pip)
+    return {"status": "trained", "results": results, "weights": learner_stats()}
 
 
 @app.get("/context/{symbol}", response_model=DebugContextResponse)

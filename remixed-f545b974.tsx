@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD", "AUD/USD", "USD/CAD", "USD/CHF"];
 const PREDICTION_HORIZONS = {
-  "5m": { label: "5M", chartLabel: "5M", countdownSec: 300, steps: 12, dt: 1 / 12, rangeMultiplier: 0.2 },
-  "1h": { label: "1H", chartLabel: "1H", countdownSec: 3600, steps: 12, dt: 1 / 24, rangeMultiplier: 1 },
-  "1d": { label: "1D", chartLabel: "1D", countdownSec: 86400, steps: 24, dt: 1 / 24, rangeMultiplier: 6 },
+  "5m": { label: "5M" },
+  "1h": { label: "1H" },
+  "1d": { label: "1D" },
 };
 
 const getDec = (pair) => (pair === "USD/JPY" ? 2 : pair === "XAU/USD" ? 1 : 4);
@@ -220,131 +220,34 @@ function calcTechScore(pair, closes, rsiVals, bb, macdData, ema9, ema21, ema50) 
   return { score: clamp(Math.round(score), 0, 100), signals };
 }
 
-function randn() {
-  const u = Math.max(Math.random(), 1e-12);
-  const v = Math.random();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-}
-
-function estimateStepVol(closes) {
-  if (closes.length < 20) return 0.0001;
-  const returns = [];
-  for (let i = 1; i < closes.length; i += 1) {
-    returns.push(Math.log(closes[i] / closes[i - 1]));
-  }
-  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
-  const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / returns.length;
-  return Math.max(Math.sqrt(variance), 0.00005);
-}
-
-function monteCarlo(pair, candles, context, combinedScore, horizonKey) {
-  const closes = candles.map((candle) => candle.c);
-  const price = closes.at(-1);
-  if (!price || closes.length < 20) return null;
-
-  const horizon = PREDICTION_HORIZONS[horizonKey] ?? PREDICTION_HORIZONS["1h"];
-  const tfContext =
-    horizonKey === "5m" ? context.timeframe_5m :
-    horizonKey === "1d" ? context.timeframe_1d :
-    context.timeframe_1h;
-  const directionBias = tfContext?.bias ?? context.bias;
-  const dir = directionBias === "UP" ? 1 : directionBias === "DOWN" ? -1 : 0;
-  const confidence = tfContext?.confidence ?? context.confidence ?? 50;
-  const stepVol = estimateStepVol(closes);
-  const expectedRangePips = (context.expected_range_1h_pips ?? 10) * horizon.rangeMultiplier;
-  const atrVol = (expectedRangePips * getPipSize(pair)) / Math.max(price, 1e-8) / Math.max(horizon.steps / 2, 1);
-  const sigma = Math.max(stepVol, atrVol);
-  const mu = dir * sigma * ((confidence - 50) / 50) * 0.45;
-  const n = 400;
-  const steps = horizon.steps;
-  const dt = horizon.dt;
-
-  const paths = Array.from({ length: n }, () => {
-    let p = price;
-    const path = [p];
-    for (let t = 0; t < steps; t += 1) {
-      p = p * Math.exp((mu - 0.5 * sigma * sigma) * dt + sigma * Math.sqrt(dt) * randn());
-      path.push(p);
-    }
-    return path;
-  });
-
-  const stats = Array.from({ length: steps + 1 }, (_, t) => {
-    const values = [...paths.map((path) => path[t])].sort((a, b) => a - b);
-    const mean = values.reduce((sum, value) => sum + value, 0) / n;
-    const std = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / n);
-    return {
-      mean,
-      std,
-      p5: values[Math.floor(n * 0.05)],
-      p10: values[Math.floor(n * 0.1)],
-      p25: values[Math.floor(n * 0.25)],
-      p50: values[Math.floor(n * 0.5)],
-      p75: values[Math.floor(n * 0.75)],
-      p90: values[Math.floor(n * 0.9)],
-      p95: values[Math.floor(n * 0.95)],
-    };
-  });
-
-  const last = stats[steps];
-  const pipSize = getPipSize(pair);
-  const target = last.p50;
-  const tp = dir >= 0 ? last.p75 : last.p25;
-  const tp2 = dir >= 0 ? last.p90 : last.p10;
-  const sl = dir >= 0 ? last.p5 : last.p95;
-  const pips = Math.round((target - price) / pipSize);
-  const bullishPaths = paths.filter((path) => path[steps] > price).length;
-  const conf = dir >= 0 ? (bullishPaths / n) * 100 : (1 - bullishPaths / n) * 100;
-  const rr = Math.abs(tp - price) / Math.max(Math.abs(sl - price), 1e-10);
-
-  const finalPrices = paths.map((path) => path[steps]).sort((a, b) => a - b);
-  const binCount = 20;
-  const binMin = finalPrices[0];
-  const binMax = finalPrices[n - 1];
-  const binSize = Math.max((binMax - binMin) / binCount, 1e-10);
-  const bins = Array.from({ length: binCount }, (_, index) => ({
-    lo: binMin + index * binSize,
-    hi: binMin + (index + 1) * binSize,
-    count: 0,
-  }));
-
-  finalPrices.forEach((value) => {
-    const idx = Math.min(Math.floor((value - binMin) / binSize), binCount - 1);
-    bins[idx].count += 1;
-  });
-
+function computeMLPred(pair, context, market, predictionHorizon) {
+  if (!context || !market?.price) return null;
+  const tf = predictionHorizon === "5m" ? context.timeframe_5m
+           : predictionHorizon === "1d" ? context.timeframe_1d
+           : context.timeframe_1h;
+  const bias = tf?.bias ?? context.bias;
+  const confidence = tf?.confidence ?? context.confidence ?? 50;
+  const dir = bias === "UP" ? 1 : bias === "DOWN" ? -1 : 0;
+  if (dir === 0) return { direction: "NEUTRO", confidence, entry: market.price, dir: 0 };
+  const atr = market.atr_14_pips ?? 10;
+  const pip = getPipSize(pair);
+  const price = market.price;
+  const atrMult = { "5m": 0.25, "1h": 1.0, "1d": 4.0 }[predictionHorizon] ?? 1.0;
+  const confFactor = clamp(confidence / 60, 0.5, 2.0);
+  const slPips  = atr * 1.5 * atrMult;
+  const tp1Pips = atr * 1.0 * atrMult * confFactor;
+  const tp2Pips = atr * 1.8 * atrMult * confFactor;
   return {
-    horizonKey,
-    horizonLabel: horizon.label,
-    chartLabel: horizon.chartLabel,
-    countdownSec: horizon.countdownSec,
-    steps,
-    stats,
-    target,
-    tp,
-    tp2,
-    sl,
-    pips,
-    conf,
-    rr,
-    dir,
-    bins,
-    finalPrices,
-    n,
-    combinedScore,
-    variance: last.std ** 2,
-    skewness: (() => {
-      const mean = last.mean;
-      const std = last.std || 1e-10;
-      return finalPrices.reduce((sum, value) => sum + (value - mean) ** 3, 0) / (n * std ** 3);
-    })(),
-    kurtosis: (() => {
-      const mean = last.mean;
-      const std = last.std || 1e-10;
-      return finalPrices.reduce((sum, value) => sum + (value - mean) ** 4, 0) / (n * std ** 4) - 3;
-    })(),
+    direction: bias === "UP" ? "ALCISTA" : "BAJISTA",
+    bias, confidence, entry: price, dir,
+    sl:  price - dir * slPips  * pip,
+    tp:  price + dir * tp1Pips * pip,
+    tp2: price + dir * tp2Pips * pip,
+    pips: Math.round(dir * tp1Pips),
+    rr: tp1Pips / Math.max(slPips, 0.01),
   };
 }
+
 
 function EmptyState({ text }) {
   return (
@@ -364,7 +267,7 @@ function EmptyState({ text }) {
   );
 }
 
-function Chart({ pair, candles, mc, ema9, ema21, ema50, bb, srZones, fibs, showEMA, showBB, showFib, showSR }) {
+function Chart({ pair, candles, mlPred, ema9, ema21, ema50, bb, srZones, fibs, showEMA, showBB, showFib, showSR }) {
   if (!candles.length) return <EmptyState text="Cargando velas reales..." />;
 
   const width = 820;
@@ -372,15 +275,14 @@ function Chart({ pair, candles, mc, ema9, ema21, ema50, bb, srZones, fibs, showE
   const pad = { top: 28, right: 80, bottom: 28, left: 72 };
   const chartW = width - pad.left - pad.right;
   const chartH = height - pad.top - pad.bottom;
-  const predSteps = mc?.steps ?? 0;
-  const totalBars = candles.length + predSteps + 1;
+  const totalBars = candles.length;
   const barWidth = chartW / totalBars;
-  const histEnd = candles.length;
 
+  const mlLevels = mlPred?.dir !== 0 ? [mlPred.tp2, mlPred.tp, mlPred.sl] : [];
   const allValues = [
     ...candles.flatMap((candle) => [candle.h, candle.l]),
     ...bb.filter(Boolean).flatMap((band) => [band.upper, band.lower]),
-    ...(mc ? mc.stats.flatMap((stat) => [stat.p5, stat.p95]) : []),
+    ...mlLevels,
   ];
   const rawMin = Math.min(...allValues);
   const rawMax = Math.max(...allValues);
@@ -393,25 +295,11 @@ function Chart({ pair, candles, mc, ema9, ema21, ema50, bb, srZones, fibs, showE
   const currentPrice = candles.at(-1)?.c ?? 0;
   const d = getDec(pair);
   const yTicks = Array.from({ length: 7 }, (_, index) => minV + (range / 6) * index);
-  const separatorX = toX(histEnd);
 
   const bbUpper = bb.map((band, index) => (band ? `${toX(index)},${toY(band.upper)}` : "")).filter(Boolean);
   const bbLower = bb.map((band, index) => (band ? `${toX(index)},${toY(band.lower)}` : "")).filter(Boolean);
   const bbMid = bb.map((band, index) => (band ? `${toX(index)},${toY(band.mid)}` : "")).filter(Boolean);
   const bbPolygon = bbUpper.length ? [...bbUpper, ...[...bbLower].reverse()].join(" ") : null;
-  const medLine = mc ? mc.stats.map((stat, index) => `${toX(histEnd + index)},${toY(stat.p50)}`).join(" ") : null;
-  const band90 = mc
-    ? [
-        ...mc.stats.map((stat, index) => `${toX(histEnd + index)},${toY(stat.p95)}`),
-        ...[...mc.stats].reverse().map((stat, index) => `${toX(histEnd + mc.stats.length - 1 - index)},${toY(stat.p5)}`),
-      ].join(" ")
-    : null;
-  const band50 = mc
-    ? [
-        ...mc.stats.map((stat, index) => `${toX(histEnd + index)},${toY(stat.p75)}`),
-        ...[...mc.stats].reverse().map((stat, index) => `${toX(histEnd + mc.stats.length - 1 - index)},${toY(stat.p25)}`),
-      ].join(" ")
-    : null;
 
   const emaPath = (series, color, dash = "") => {
     const path = series
@@ -484,17 +372,14 @@ function Chart({ pair, candles, mc, ema9, ema21, ema50, bb, srZones, fibs, showE
         </>
       )}
 
-      {mc && (
+      {mlPred?.dir !== 0 && mlPred && (
         <>
-          <line x1={separatorX} y1={pad.top} x2={separatorX} y2={pad.top + chartH} stroke="#1a3a54" strokeWidth="1" strokeDasharray="5,3" />
-          <text x={separatorX - 2} y={pad.top - 8} textAnchor="end" fill="#1a3a54" fontSize="8" fontFamily="monospace">
-            HIST
-          </text>
-          <text x={separatorX + 2} y={pad.top - 8} fill="#2a5a7a" fontSize="8" fontFamily="monospace">
-            PREDICCIÓN {mc.chartLabel} →
-          </text>
-          <polygon points={band90} fill="rgba(0,212,255,0.06)" stroke="none" />
-          <polygon points={band50} fill="rgba(0,212,255,0.13)" stroke="none" />
+          <line x1={pad.left} y1={toY(mlPred.tp2)} x2={pad.left + chartW} y2={toY(mlPred.tp2)} stroke="#00ff88" strokeWidth="0.8" strokeDasharray="3,3" opacity="0.5" />
+          <line x1={pad.left} y1={toY(mlPred.tp)}  x2={pad.left + chartW} y2={toY(mlPred.tp)}  stroke="#00e87a" strokeWidth="1.3" strokeDasharray="5,3" opacity="0.85" />
+          <line x1={pad.left} y1={toY(mlPred.sl)}  x2={pad.left + chartW} y2={toY(mlPred.sl)}  stroke="#ff4060" strokeWidth="1.3" strokeDasharray="5,3" opacity="0.85" />
+          <text x={pad.left + chartW - 2} y={toY(mlPred.tp) - 3} textAnchor="end" fill="#00e87a" fontSize="8" fontFamily="monospace">TP {fmt(pair, mlPred.tp)}</text>
+          <text x={pad.left + chartW - 2} y={toY(mlPred.tp2) - 3} textAnchor="end" fill="#00ff88" fontSize="7" fontFamily="monospace">TP2 {fmt(pair, mlPred.tp2)}</text>
+          <text x={pad.left + chartW - 2} y={toY(mlPred.sl) + 10} textAnchor="end" fill="#ff4060" fontSize="8" fontFamily="monospace">SL {fmt(pair, mlPred.sl)}</text>
         </>
       )}
 
@@ -512,15 +397,6 @@ function Chart({ pair, candles, mc, ema9, ema21, ema50, bb, srZones, fibs, showE
         );
       })}
 
-      {mc && medLine && (
-        <>
-          <polyline points={medLine} fill="none" stroke="#00d4ff" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-          <line x1={separatorX} y1={toY(mc.tp2)} x2={pad.left + chartW} y2={toY(mc.tp2)} stroke="#00ff88" strokeWidth="0.8" strokeDasharray="3,3" opacity="0.6" />
-          <line x1={separatorX} y1={toY(mc.tp)} x2={pad.left + chartW} y2={toY(mc.tp)} stroke="#00e87a" strokeWidth="1.2" strokeDasharray="5,3" opacity="0.8" />
-          <line x1={separatorX} y1={toY(mc.target)} x2={pad.left + chartW} y2={toY(mc.target)} stroke="#00d4ff" strokeWidth="1" strokeDasharray="2,2" opacity="0.5" />
-          <line x1={separatorX} y1={toY(mc.sl)} x2={pad.left + chartW} y2={toY(mc.sl)} stroke="#ff4060" strokeWidth="1.2" strokeDasharray="5,3" opacity="0.8" />
-        </>
-      )}
 
       {[0, 10, 20, 30, 40, candles.length - 1].map((index, i) => {
         const candle = candles[index];
@@ -645,44 +521,6 @@ function VolumeChart({ candles }) {
   );
 }
 
-function DistChart({ mc, pair }) {
-  if (!mc) return null;
-  const width = 260;
-  const height = 120;
-  const pad = { top: 18, right: 12, bottom: 20, left: 12 };
-  const chartW = width - pad.left - pad.right;
-  const chartH = height - pad.top - pad.bottom;
-  const maxCount = Math.max(...mc.bins.map((bin) => bin.count), 1);
-  const barWidth = chartW / mc.bins.length;
-  const current = mc.stats[0].p50;
-
-  return (
-    <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", background: "#040d18", borderRadius: "4px", border: "1px solid #0c1e32" }}>
-      <text x={width / 2} y={13} textAnchor="middle" fill="#1a4060" fontSize="9" fontFamily="monospace" letterSpacing="1">
-        DISTRIBUCIÓN FINAL ({mc.chartLabel})
-      </text>
-      {mc.bins.map((bin, index) => {
-        const h = (bin.count / maxCount) * chartH;
-        const x = pad.left + index * barWidth;
-        const isBull = bin.lo > current;
-        const isBear = bin.hi < current;
-        return (
-          <rect
-            key={index}
-            x={x}
-            y={pad.top + chartH - h}
-            width={Math.max(1, barWidth - 0.5)}
-            height={h}
-            fill={isBull ? "rgba(0,232,122,.7)" : isBear ? "rgba(255,64,96,.7)" : "rgba(0,212,255,.5)"}
-          />
-        );
-      })}
-      <text x={width / 2} y={height - 4} textAnchor="middle" fill="#1a4060" fontSize="8" fontFamily="monospace">
-        μ={fmt(pair, mc.stats.at(-1)?.mean)} σ={fmt(pair, mc.stats.at(-1)?.std)}
-      </text>
-    </svg>
-  );
-}
 
 function LayerToggles({ toggles }) {
   return (
@@ -697,27 +535,21 @@ function LayerToggles({ toggles }) {
   );
 }
 
-function TechnicalSignalsPanel({ techScore, mc, pair }) {
+function TechnicalSignalsPanel({ techScore }) {
   return (
-    <div style={{ marginTop: "8px", display: "flex", gap: "8px", alignItems: "flex-start" }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px" }}>
-          SEÑALES TÉCNICAS REALES — SCORE {techScore.score}/100
-        </div>
-        <div style={{ maxHeight: "96px", overflowY: "auto" }}>
-          {techScore.signals.map((signal, index) => (
-            <div key={index} className="sig-row">
-              <span style={{ fontSize: "10px", color: "#7a9abb", flex: 1 }}>{signal.l}</span>
-              <span style={{ fontSize: "11px", fontWeight: 800, color: signal.c, fontFamily: "'Orbitron',monospace", marginLeft: "8px" }}>
-                {signal.pts > 0 ? "+" : ""}
-                {signal.pts}
-              </span>
-            </div>
-          ))}
-        </div>
+    <div style={{ marginTop: "8px" }}>
+      <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px" }}>
+        SEÑALES TÉCNICAS REALES — SCORE {techScore.score}/100
       </div>
-      <div style={{ width: "260px" }}>
-        <DistChart mc={mc} pair={pair} />
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "3px" }}>
+        {techScore.signals.map((signal, index) => (
+          <div key={index} className="sig-row" style={{ minWidth: "180px", flex: "1 1 180px" }}>
+            <span style={{ fontSize: "10px", color: "#7a9abb", flex: 1 }}>{signal.l}</span>
+            <span style={{ fontSize: "11px", fontWeight: 800, color: signal.c, fontFamily: "'Orbitron',monospace", marginLeft: "8px" }}>
+              {signal.pts > 0 ? "+" : ""}{signal.pts}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -736,38 +568,57 @@ function MetricsCard({ rows }) {
   );
 }
 
-function PredictionPanel({ mc, pair, combinedBias, running, context, candles, onPredict, predictionHorizon }) {
+function MLPredictionPanel({ pair, mlPred, predictionHorizon, onChangePredictionHorizon, training, onTrain }) {
   return (
     <>
-      <button className="pred-btn" style={{ width: "100%", marginBottom: "8px" }} onClick={onPredict} disabled={running || !context || !candles.length}>
-        {running ? "⟳ CALCULANDO..." : `⚡ PREDECIR ${PREDICTION_HORIZONS[predictionHorizon].label}`}
-      </button>
+      <div style={{ display: "flex", gap: "5px", marginBottom: "8px" }}>
+        {Object.entries(PREDICTION_HORIZONS).map(([key, h]) => (
+          <button key={key} className={`tog${predictionHorizon === key ? " on" : ""}`} style={{ flex: 1 }} onClick={() => onChangePredictionHorizon(key)}>
+            {h.label}
+          </button>
+        ))}
+      </div>
 
-      {mc && (
+      <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px" }}>
+        PREDICCIÓN ML · {PREDICTION_HORIZONS[predictionHorizon].label}
+      </div>
+
+      {mlPred && mlPred.dir !== 0 ? (
         <>
-          <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px" }}>PREDICCIÓN SOBRE DATOS REALES</div>
           <div style={{ display: "flex", gap: "5px", marginBottom: "6px" }}>
             {[
-              { v: `${mc.pips >= 0 ? "+" : ""}${mc.pips}`, l: "PIPS", c: mc.pips >= 0 ? "#00e87a" : "#ff4060" },
-              { v: `${mc.conf.toFixed(0)}%`, l: "CONF", c: mc.conf >= 60 ? "#00e87a" : "#ffaa00" },
-              { v: `${mc.rr.toFixed(1)}:1`, l: "R/R", c: mc.rr >= 1.5 ? "#00e87a" : "#ffaa00" },
-            ].map((metric) => (
-              <div key={metric.l} className="metric">
-                <div className="mval" style={{ color: metric.c, fontSize: "14px" }}>{metric.v}</div>
-                <div className="mlbl">{metric.l}</div>
+              { v: `${mlPred.pips >= 0 ? "+" : ""}${mlPred.pips}`, l: "PIPS", c: mlPred.pips >= 0 ? "#00e87a" : "#ff4060" },
+              { v: `${mlPred.confidence}%`, l: "CONF", c: scoreCol(mlPred.confidence) },
+              { v: `${mlPred.rr.toFixed(1)}:1`, l: "R/R", c: mlPred.rr >= 1.5 ? "#00e87a" : "#ffaa00" },
+            ].map((m) => (
+              <div key={m.l} className="metric">
+                <div className="mval" style={{ color: m.c, fontSize: "14px" }}>{m.v}</div>
+                <div className="mlbl">{m.l}</div>
               </div>
             ))}
           </div>
           <MetricsCard
             rows={[
-              { l: `Objetivo ${mc.horizonLabel}`, v: fmt(pair, mc.target), c: biasCol(combinedBias) },
-              { l: "TP1", v: fmt(pair, mc.tp), c: "#00e87a" },
-              { l: "TP2", v: fmt(pair, mc.tp2), c: "#00ff88" },
-              { l: "Stop Loss", v: fmt(pair, mc.sl), c: "#ff4060" },
+              { l: "Dirección", v: mlPred.direction, c: biasCol(mlPred.direction) },
+              { l: "TP1", v: fmt(pair, mlPred.tp), c: "#00e87a" },
+              { l: "TP2", v: fmt(pair, mlPred.tp2), c: "#00ff88" },
+              { l: "Stop Loss", v: fmt(pair, mlPred.sl), c: "#ff4060" },
             ]}
           />
         </>
+      ) : (
+        <div style={{ fontSize: "10px", color: "#1a4060", textAlign: "center", padding: "10px 0" }}>
+          Sin señal clara — espere confirmación
+        </div>
       )}
+
+      <button
+        onClick={onTrain}
+        disabled={training}
+        style={{ width: "100%", marginTop: "8px", background: training ? "#0a1828" : "#071420", border: `1px solid ${training ? "#1a4060" : "#00d4ff44"}`, borderRadius: "3px", color: training ? "#1a4060" : "#00d4ff", fontSize: "9px", letterSpacing: "1px", padding: "6px", cursor: training ? "not-allowed" : "pointer" }}
+      >
+        {training ? "⟳ ENTRENANDO..." : "⚙ ENTRENAR CON HISTÓRICO"}
+      </button>
     </>
   );
 }
@@ -883,11 +734,7 @@ function SidebarPanel(props) {
   const {
     combinedBias,
     combinedScore,
-    predict,
-    running,
     context,
-    candles,
-    mc,
     pair,
     livePrice,
     previousClose,
@@ -900,10 +747,12 @@ function SidebarPanel(props) {
     lastMACD,
     techScore,
     providers,
-    predTime,
     predictionHorizon,
     onChangePredictionHorizon,
     mlStats,
+    mlPred,
+    training,
+    onTrain,
   } = props;
   const tf5m = context?.timeframe_5m;
   const tf15m = context?.timeframe_15m;
@@ -926,19 +775,7 @@ function SidebarPanel(props) {
         <div style={{ fontSize: "8px", color: "#1a4060", marginTop: "3px" }}>Técnico real + contexto real API</div>
       </div>
 
-      <PredictionPanel mc={mc} pair={pair} combinedBias={combinedBias} running={running} context={context} candles={candles} onPredict={predict} predictionHorizon={predictionHorizon} />
-      <div style={{ display: "flex", gap: "5px", marginBottom: "8px" }}>
-        {Object.entries(PREDICTION_HORIZONS).map(([key, horizon]) => (
-          <button
-            key={key}
-            className={`tog${predictionHorizon === key ? " on" : ""}`}
-            style={{ flex: 1 }}
-            onClick={() => onChangePredictionHorizon(key)}
-          >
-            {horizon.label}
-          </button>
-        ))}
-      </div>
+      <MLPredictionPanel pair={pair} mlPred={mlPred} predictionHorizon={predictionHorizon} onChangePredictionHorizon={onChangePredictionHorizon} training={training} onTrain={onTrain} />
 
       <div style={{ fontSize: "7px", letterSpacing: "2px", color: "#1a4060", marginBottom: "5px", marginTop: "6px" }}>MERCADO REAL</div>
       <MetricsCard
@@ -1021,11 +858,6 @@ function SidebarPanel(props) {
 
       <MLLearnerPanel mlStats={mlStats} />
 
-      {predTime && (
-        <div style={{ fontSize: "8px", color: "#1a3050", marginTop: "6px", textAlign: "center", lineHeight: "1.6" }}>
-          Generada: {predTime.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-        </div>
-      )}
     </div>
   );
 }
@@ -1034,19 +866,15 @@ export default function AtlasChart() {
   const [pair, setPair] = useState("EUR/USD");
   const [market, setMarket] = useState(null);
   const [context, setContext] = useState(null);
-  const [mc, setMc] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [countdown, setCountdown] = useState(null);
-  const [predTime, setPredTime] = useState(null);
   const [showEMA, setShowEMA] = useState(true);
   const [showBB, setShowBB] = useState(true);
   const [showFib, setShowFib] = useState(false);
   const [showSR, setShowSR] = useState(true);
   const [predictionHorizon, setPredictionHorizon] = useState("1h");
   const [mlStats, setMlStats] = useState(null);
-  const timerRef = useRef(null);
+  const [training, setTraining] = useState(false);
 
   useEffect(() => {
     const fetchMl = async () => {
@@ -1092,9 +920,6 @@ export default function AtlasChart() {
     };
   }, [symbol]);
 
-  useEffect(() => () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-  }, []);
 
   const candles = useMemo(
     () =>
@@ -1139,65 +964,29 @@ export default function AtlasChart() {
     return "NEUTRO";
   }, [context, combinedScore]);
 
-  const predict = () => {
-    if (!context || !candles.length) return;
-    setRunning(true);
-    setTimeout(() => {
-      const result = monteCarlo(pair, candles, context, combinedScore, predictionHorizon);
-      setMc(result);
-      setPredTime(new Date());
-      setRunning(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-      let seconds = result?.countdownSec ?? PREDICTION_HORIZONS[predictionHorizon].countdownSec;
-      setCountdown(seconds);
-      timerRef.current = setInterval(() => {
-        seconds -= 1;
-        setCountdown(seconds);
-        if (seconds <= 0) {
-          clearInterval(timerRef.current);
-          setCountdown(null);
-        }
-      }, 1000);
-    }, 300);
+  const mlPred = useMemo(
+    () => computeMLPred(pair, context, market, predictionHorizon),
+    [pair, context, market, predictionHorizon]
+  );
+
+  const train = async () => {
+    setTraining(true);
+    try {
+      await fetch(`${API_BASE}/learning/train`, { method: "POST" });
+      const data = await fetchJson("/learning/stats");
+      setMlStats(data);
+    } catch {}
+    setTraining(false);
   };
 
-  const changePredictionHorizon = (nextHorizon) => {
-    setPredictionHorizon(nextHorizon);
-    if (mc?.horizonKey !== nextHorizon) {
-      setMc(null);
-      setPredTime(null);
-      setCountdown(null);
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-  };
+  const changePredictionHorizon = (nextHorizon) => setPredictionHorizon(nextHorizon);
 
   const changePair = (nextPair) => {
     setPair(nextPair);
     setMarket(null);
     setContext(null);
-    setMc(null);
-    setPredTime(null);
-    setCountdown(null);
     setError("");
     setLoading(true);
-    if (timerRef.current) clearInterval(timerRef.current);
-  };
-
-  const fmtCountdown = (seconds) => {
-    if (seconds == null) return "-";
-    if (seconds >= 86400) {
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      return `${days}d ${hours}h`;
-    }
-    if (seconds >= 3600) {
-      const hours = Math.floor(seconds / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      return `${hours}h ${String(minutes).padStart(2, "0")}m`;
-    }
-    const minutes = Math.floor(seconds / 60);
-    const rem = seconds % 60;
-    return `${minutes}:${String(rem).padStart(2, "0")}`;
   };
 
   const providers = context?.providers || {};
@@ -1242,16 +1031,9 @@ export default function AtlasChart() {
       <div style={{ background: "linear-gradient(180deg,#060e1a,#030b14)", borderBottom: "1px solid #0a1828", padding: "8px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <div className="logo">ATLAS</div>
-          <div style={{ fontSize: "8px", color: "#1a4060", letterSpacing: "1px" }}>DATOS REALES · MERCADO + CONTEXTO MACRO + MONTE CARLO</div>
+          <div style={{ fontSize: "8px", color: "#1a4060", letterSpacing: "1px" }}>DATOS REALES · MERCADO + CONTEXTO MACRO + MODELO ML</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          {countdown != null && (
-            <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "#0a1828", border: "1px solid #005533", borderRadius: "3px", padding: "4px 10px" }}>
-              <div className="live-dot" />
-              <span style={{ fontFamily: "'Orbitron',monospace", fontSize: "12px", color: "#00ff88" }}>{fmtCountdown(countdown)}</span>
-              <span style={{ fontSize: "7px", color: "#006633", letterSpacing: "1px" }}>PRED ACTIVA</span>
-            </div>
-          )}
           <div style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "9px", color: "#00e87a" }}>
             <div className="live-dot" />
             LIVE API
@@ -1288,24 +1070,20 @@ export default function AtlasChart() {
                 <div style={{ fontFamily: "'Orbitron',monospace", fontSize: "10px", color: "#00d4ff", letterSpacing: "2px" }}>CARGANDO DATOS REALES</div>
               </div>
             )}
-            <Chart pair={pair} candles={candles} mc={mc} ema9={ema9} ema21={ema21} ema50={ema50} bb={bb} srZones={srZones} fibs={fibs} showEMA={showEMA} showBB={showBB} showFib={showFib} showSR={showSR} />
+            <Chart pair={pair} candles={candles} mlPred={mlPred} ema9={ema9} ema21={ema21} ema50={ema50} bb={bb} srZones={srZones} fibs={fibs} showEMA={showEMA} showBB={showBB} showFib={showFib} showSR={showSR} />
           </div>
 
           <RSIChart rsiVals={rsiVals} />
           <MACDChart macdData={macdData} />
           <VolumeChart candles={candles} />
 
-          <TechnicalSignalsPanel techScore={techScore} mc={mc} pair={pair} />
+          <TechnicalSignalsPanel techScore={techScore} />
         </div>
 
         <SidebarPanel
           combinedBias={combinedBias}
           combinedScore={combinedScore}
-          predict={predict}
-          running={running}
           context={context}
-          candles={candles}
-          mc={mc}
           pair={pair}
           livePrice={livePrice}
           previousClose={previousClose}
@@ -1318,10 +1096,12 @@ export default function AtlasChart() {
           lastMACD={lastMACD}
           techScore={techScore}
           providers={providers}
-          predTime={predTime}
           predictionHorizon={predictionHorizon}
           onChangePredictionHorizon={changePredictionHorizon}
           mlStats={mlStats}
+          mlPred={mlPred}
+          training={training}
+          onTrain={train}
         />
       </div>
     </div>
